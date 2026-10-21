@@ -1,0 +1,446 @@
+import { z } from "zod";
+import {
+  MEASURED_BITRATE_KBPS_MAX,
+  MEASURED_FRAMES_PER_SECOND_MAX,
+  sfuMediaSchema,
+} from "../../shared/protocol";
+
+export const NATIVE_CLIENT_PROTOCOL = 9;
+export const NATIVE_CLIENT_PORT_START = 39_721;
+export const NATIVE_CLIENT_PORT_END = 39_730;
+export const NATIVE_CLIENT_SUBPROTOCOL = "piik-client-v9";
+
+const decimalIdentifierSchema = z.string().regex(/^[1-9]\d{0,19}$/);
+const opaqueIdentifierSchema = z
+  .string()
+  .min(8)
+  .max(256)
+  .regex(/^[A-Za-z0-9_-]+$/);
+
+// Discovery descriptions may grow; control responses and events stay strict.
+export const nativeDiscoveryIdentitySchema = z.object({
+  protocol: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  service: z.literal("piik-client"),
+  port: z
+    .number()
+    .int()
+    .min(NATIVE_CLIENT_PORT_START)
+    .max(NATIVE_CLIENT_PORT_END),
+});
+
+export const nativeHealthSchema = nativeDiscoveryIdentitySchema.extend({
+  protocol: z.literal(NATIVE_CLIENT_PROTOCOL),
+  instanceToken: z
+    .string()
+    .length(43)
+    .regex(/^[A-Za-z0-9_-]+$/),
+  nativeMedia: z
+    .object({
+      receiverReuse: z.boolean().default(false),
+      video: z.boolean().default(false),
+      processAudio: z.boolean().default(false),
+      systemAudio: z.boolean().default(false),
+      processAudioExclusion: z.boolean().default(false),
+      microphone: z.boolean().default(false),
+      // API availability, not Windows approval or observed border visibility.
+      captureBorderControl: z.boolean().default(false),
+      // The helper accepts a variable or constant bitrate mode (Windows).
+      bitrateModeControl: z.boolean().default(false),
+      hardwareH264: z.boolean().default(false),
+      softwareVP8: z.boolean().default(false),
+      hardwareAV1: z.boolean().default(false),
+      hardwareHEVC: z.boolean().default(false),
+      // Older Apps close control on unknown requests; ask only when advertised.
+      hostSettings: z.boolean().default(false),
+    })
+    .prefault({}),
+});
+export type NativeHealth = z.infer<typeof nativeHealthSchema>;
+
+const nativeWindowTargetSchema = z
+  .object({
+    kind: z.literal("window"),
+    sourceId: decimalIdentifierSchema,
+    pid: z.number().int().positive().max(0xffff_ffff),
+    creationTime: decimalIdentifierSchema,
+    title: z.string().min(1).max(4096),
+  })
+  .strict();
+
+const nativeDisplayTargetSchema = z
+  .object({
+    kind: z.literal("display"),
+    sourceId: decimalIdentifierSchema,
+    title: z.string().min(1).max(4096),
+  })
+  .strict();
+
+const nativePickerTargetSchema = z
+  .object({
+    kind: z.literal("picker"),
+    sourceId: decimalIdentifierSchema,
+    title: z.string().min(1).max(4096),
+  })
+  .strict();
+
+export const nativeCaptureTargetSchema = z.discriminatedUnion("kind", [
+  nativeWindowTargetSchema,
+  nativeDisplayTargetSchema,
+  nativePickerTargetSchema,
+]);
+export type NativeCaptureTarget = z.infer<typeof nativeCaptureTargetSchema>;
+
+const nativeEncoderSchema = z
+  .object({
+    index: z.number().int().nonnegative().max(0xffff_ffff),
+    name: z.string().min(1).max(512),
+    identity: z.string().min(1).max(512),
+  })
+  .strict();
+
+const nativeAdapterSchema = z
+  .object({
+    index: z.number().int().nonnegative().max(0xffff_ffff),
+    name: z.string().min(1).max(512),
+    identity: z.string().min(1).max(512),
+    hardwareH264: z.array(nativeEncoderSchema).max(64),
+  })
+  .strict();
+export type NativeAdapter = z.infer<typeof nativeAdapterSchema>;
+
+const candidateSchema = z
+  .object({
+    candidate: z.string().max(4096),
+    sdpMid: z.string().max(128).nullable().optional(),
+    sdpMLineIndex: z.number().int().min(0).max(255).nullable().optional(),
+    usernameFragment: z.string().max(256).nullable().optional(),
+  })
+  .strict();
+
+const responseBase = {
+  version: z.literal(NATIVE_CLIENT_PROTOCOL),
+  id: opaqueIdentifierSchema,
+};
+
+const nativeVideoCodecSchema = z.enum(["h264", "vp8", "av1", "h265"]);
+export type NativeVideoCodec = z.infer<typeof nativeVideoCodecSchema>;
+
+export const readyResponseSchema = z
+  .object({ ...responseBase, type: z.literal("ready") })
+  .strict();
+export const pongResponseSchema = z
+  .object({ ...responseBase, type: z.literal("pong") })
+  .strict();
+export const requestFailedResponseSchema = z
+  .object({
+    ...responseBase,
+    type: z.literal("request-failed"),
+    code: z.literal("operation-failed"),
+  })
+  .strict();
+// The stored object is opaque here; src/client/lib/host-settings.ts owns its schema.
+export const hostSettingsResponseSchema = z
+  .object({
+    ...responseBase,
+    type: z.literal("host-settings"),
+    settings: z.record(z.string(), z.unknown()).nullable(),
+  })
+  .strict();
+export const hostSettingsSavedResponseSchema = z
+  .object({ ...responseBase, type: z.literal("host-settings-saved") })
+  .strict();
+export const captureOptionsResponseSchema = z
+  .object({
+    ...responseBase,
+    type: z.literal("capture-options"),
+    adapters: z.array(nativeAdapterSchema).max(64),
+  })
+  .strict();
+export const sourceListResponseSchema = z
+  .object({
+    ...responseBase,
+    type: z.literal("source-list"),
+    sources: z.array(nativeCaptureTargetSchema).max(1024),
+  })
+  .strict();
+export const microphoneListResponseSchema = z.object({
+  ...responseBase, type: z.literal("microphone-list"),
+  devices: z.array(z.object({ id: z.string().min(1).max(512), label: z.string().min(1).max(512) }).strict()).max(64),
+}).strict();
+export const sourcePreviewResponseSchema = z
+  .object({
+    ...responseBase,
+    type: z.literal("source-preview"),
+    sourceKey: z.string().min(8).max(256),
+    mime: z.literal("image/bmp"),
+    data: z.string().max(256 * 1024),
+  })
+  .strict();
+// Applied capture format (Source is helper-resolved); absent while unknown.
+const nativeVideoFormatSchema = z
+  .object({
+    width: z.number().int().min(1).max(16_384),
+    height: z.number().int().min(1).max(16_384),
+    framerate: z.number().int().min(1).max(MEASURED_FRAMES_PER_SECOND_MAX),
+  })
+  .strict();
+export type NativeVideoFormat = z.infer<typeof nativeVideoFormatSchema>;
+export const shareStartedResponseSchema = z
+  .object({
+    ...responseBase,
+    type: z.literal("share-started"),
+    shareId: opaqueIdentifierSchema,
+    audio: z.boolean(),
+    sourceAudio: z.boolean().optional(),
+    codec: nativeVideoCodecSchema,
+    video: nativeVideoFormatSchema.optional(),
+  })
+  .strict();
+export const shareUpdatedResponseSchema = z
+  .object({
+    ...responseBase,
+    type: z.literal("share-updated"),
+    shareId: opaqueIdentifierSchema,
+    video: nativeVideoFormatSchema.optional(),
+  })
+  .strict();
+export const shareSourceReplacedResponseSchema = z
+  .object({
+    ...responseBase,
+    type: z.literal("share-source-replaced"),
+    shareId: opaqueIdentifierSchema,
+    video: nativeVideoFormatSchema.optional(),
+  })
+  .strict();
+export const edgeOfferResponseSchema = z
+  .object({
+    ...responseBase,
+    type: z.literal("edge-offer"),
+    shareId: opaqueIdentifierSchema,
+    connectionId: opaqueIdentifierSchema,
+    sdp: z
+      .string()
+      .min(1)
+      .max(48 * 1024),
+  })
+  .strict();
+export const receiveAnswerResponseSchema = z
+  .object({
+    ...responseBase,
+    type: z.literal("receive-answer"),
+    shareId: opaqueIdentifierSchema,
+    connectionId: opaqueIdentifierSchema,
+    sdp: z
+      .string()
+      .min(1)
+      .max(48 * 1024),
+    audio: z.boolean(),
+    codec: nativeVideoCodecSchema,
+    reused: z.boolean().optional(),
+  })
+  .strict();
+
+export const publicationResponseSchema = z
+  .object({
+    ...responseBase,
+    type: z.enum(["publication-offer", "publication-media"]),
+    shareId: opaqueIdentifierSchema,
+    publicationGeneration: opaqueIdentifierSchema,
+    connectionId: opaqueIdentifierSchema,
+    sdp: z
+      .string()
+      .max(48 * 1024)
+      .optional(),
+    media: sfuMediaSchema,
+  })
+  .strict();
+
+export const nativeAckResponseSchema = z
+  .object({
+    ...responseBase,
+    type: z.enum([
+      "edge-answer-accepted",
+      "edge-candidate-accepted",
+      "edge-closed",
+      "receive-candidate-accepted",
+      "receiver-closed",
+      "receive-stopped",
+      "share-stopped",
+      "share-paused",
+      "microphone-set",
+      "publication-answer-accepted",
+      "publication-candidate-accepted",
+      "publication-layers-accepted",
+      "publication-closed",
+    ]),
+  })
+  .strict();
+
+const eventBase = {
+  version: z.literal(NATIVE_CLIENT_PROTOCOL),
+  shareId: opaqueIdentifierSchema,
+};
+
+export const nativeEventSchema = z.discriminatedUnion("type", [
+  z.object({ ...eventBase, type: z.literal("audio-state"), sourceAudio: z.boolean(), microphone: z.boolean(), failed: z.boolean() }).strict(),
+  z
+    .object({
+      ...eventBase,
+      type: z.literal("publication-quality"),
+      publicationGeneration: opaqueIdentifierSchema,
+      connectionId: opaqueIdentifierSchema,
+      sampleTimestampMs: z
+        .number()
+        .int()
+        .nonnegative()
+        .max(Number.MAX_SAFE_INTEGER),
+      sampleWindowMs: z.number().int().min(1_000).max(5_000),
+      rtpStatsId: z.string().min(1).max(256),
+      trackIdentifier: z.string().min(1).max(256),
+      codec: nativeVideoCodecSchema,
+      videoEncodingCount: z.number().int().min(1).max(3),
+      activeVideoEncodingCount: z.number().int().min(0).max(3),
+      rid: z.string().max(16),
+      intervalFramesSent: z
+        .number()
+        .int()
+        .nonnegative()
+        .max(Number.MAX_SAFE_INTEGER),
+      framesPerSecond: z.number().finite().nonnegative().max(MEASURED_FRAMES_PER_SECOND_MAX),
+      width: z.number().int().nonnegative().max(16_384),
+      height: z.number().int().nonnegative().max(16_384),
+      bitrateKbps: z.number().finite().nonnegative().max(MEASURED_BITRATE_KBPS_MAX),
+      audioBitrateKbps: z.number().finite().nonnegative().max(1_000),
+      availableOutgoingKbps: z
+        .number()
+        .finite()
+        .nonnegative()
+        .max(MEASURED_BITRATE_KBPS_MAX)
+        .nullable(),
+      state: z.enum(["unknown", "healthy", "degraded"]),
+      reason: z.enum(["none", "bandwidth"]).nullable(),
+    })
+    .strict()
+    .refine(({ state, reason }) =>
+      state === "unknown"
+        ? reason === null
+        : state === "healthy"
+          ? reason === "none"
+          : reason === "bandwidth",
+    ),
+  z
+    .object({
+      ...eventBase,
+      type: z.literal("publication-candidate"),
+      publicationGeneration: opaqueIdentifierSchema,
+      connectionId: opaqueIdentifierSchema,
+      candidate: candidateSchema.nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      ...eventBase,
+      type: z.literal("publication-state"),
+      publicationGeneration: opaqueIdentifierSchema,
+      connectionId: opaqueIdentifierSchema,
+      state: z.enum([
+        "new",
+        "connecting",
+        "connected",
+        "disconnected",
+        "failed",
+        "closed",
+      ]),
+    })
+    .strict(),
+  z
+    .object({
+      ...eventBase,
+      type: z.literal("capture-state"),
+      state: z.enum(["starting", "active"]),
+    })
+    .strict(),
+  z
+    .object({
+      ...eventBase,
+      type: z.literal("edge-candidate"),
+      connectionId: opaqueIdentifierSchema,
+      candidate: candidateSchema.nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      ...eventBase,
+      type: z.literal("edge-state"),
+      connectionId: opaqueIdentifierSchema,
+      state: z.enum([
+        "new",
+        "connecting",
+        "connected",
+        "disconnected",
+        "failed",
+        "closed",
+      ]),
+    })
+    .strict(),
+  z
+    .object({
+      ...eventBase,
+      type: z.literal("edge-path"),
+      connectionId: opaqueIdentifierSchema,
+      localType: z.enum(["host", "srflx", "prflx", "relay"]),
+      remoteType: z.enum(["host", "srflx", "prflx", "relay"]),
+      natTraversalPath: z.enum(["unknown", "ordinary", "predicted"]),
+    })
+    .strict(),
+  z
+    .object({
+      ...eventBase,
+      type: z.literal("edge-quality"),
+      connectionId: opaqueIdentifierSchema,
+      sampleTimestampMs: z
+        .number()
+        .int()
+        .nonnegative()
+        .max(Number.MAX_SAFE_INTEGER),
+      sampleWindowMs: z.number().int().min(1_000).max(5_000),
+      rtpStatsId: z.string().min(1).max(256),
+      trackIdentifier: z.string().min(1).max(256),
+      state: z.enum(["unknown", "healthy", "degraded"]),
+      reason: z.enum(["none", "bandwidth"]).nullable(),
+      intervalFramesEncoded: z
+        .number()
+        .int()
+        .nonnegative()
+        .max(Number.MAX_SAFE_INTEGER),
+      framesPerSecond: z.number().finite().nonnegative().max(MEASURED_FRAMES_PER_SECOND_MAX),
+      bitrateKbps: z.number().finite().nonnegative().max(MEASURED_BITRATE_KBPS_MAX),
+      availableOutgoingKbps: z.number().finite().nonnegative().max(MEASURED_BITRATE_KBPS_MAX),
+      width: z.number().int().nonnegative().max(16_384),
+      height: z.number().int().nonnegative().max(16_384),
+    })
+    .strict()
+    .superRefine((event, context) => {
+      if (
+        (event.state === "unknown" && event.reason !== null) ||
+        (event.state === "healthy" && event.reason !== "none") ||
+        (event.state === "degraded" && event.reason !== "bandwidth")
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Native edge quality reason does not match its state",
+          path: ["reason"],
+        });
+      }
+    }),
+  z
+    .object({
+      ...eventBase,
+      type: z.literal("share-ended"),
+      failed: z.boolean(),
+    })
+    .strict(),
+]);
+export type NativeClientEvent = z.infer<typeof nativeEventSchema>;
+
+export type NativeIceCandidate = z.infer<typeof candidateSchema>;

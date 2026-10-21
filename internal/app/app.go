@@ -1,0 +1,689 @@
+package app
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	appconfig "github.com/TNTcraftHIM/Piik/internal/app/config"
+	"github.com/TNTcraftHIM/Piik/internal/app/lan"
+	"github.com/TNTcraftHIM/Piik/internal/app/launcher"
+	"github.com/TNTcraftHIM/Piik/internal/app/loopback"
+	"github.com/TNTcraftHIM/Piik/internal/app/nativecapture"
+	"github.com/TNTcraftHIM/Piik/internal/app/nativecontrol"
+	"github.com/TNTcraftHIM/Piik/internal/app/publictunnel"
+	"github.com/TNTcraftHIM/Piik/internal/diagnostics"
+	serverapp "github.com/TNTcraftHIM/Piik/internal/server/app"
+	serverconfig "github.com/TNTcraftHIM/Piik/internal/server/config"
+	"github.com/TNTcraftHIM/Piik/internal/server/webassets"
+	"golang.org/x/mod/semver"
+)
+
+const (
+	DefaultLocalPort            = 8787
+	publicSTUNURL               = "stun:stun.cloudflare.com:3478"
+	publicNATPredictionSTUNURLA = "stun:stun.miwifi.com:3478"
+	publicNATPredictionSTUNURLB = "stun:stun.chat.bilibili.com:3478"
+	// localShutdownTimeout bounds the ordered Local stop. The packaged smoke
+	// allows 10 s between the stop request and the exit, so it stays well
+	// inside that budget.
+	localShutdownTimeout = 5 * time.Second
+)
+
+var BuildVersion = "development"
+var BuildRevision = "development"
+
+func buildVersion() string {
+	version := strings.TrimSpace(BuildVersion)
+	if version != "" && semver.Canonical(version) == version && semver.Prerelease(version) == "" {
+		return version
+	}
+	return "development"
+}
+
+type Options struct {
+	Site           string
+	SiteSet        bool
+	Local          bool
+	Link           bool
+	ConfigPath     string
+	LANAddress     string
+	Port           int
+	DisableBrowser bool
+	Debug          bool
+	LogDir         string
+	CaptureProcess string
+	TunnelProcess  string
+	Ready          func(string)
+	console        *console
+	logger         *slog.Logger
+}
+
+func Run(ctx context.Context, options Options) (returnedErr error) {
+	ctx, cancel := context.WithCancel(ctx)
+	options.Debug = options.Debug || debugEnabled(os.Getenv("PIIK_DEBUG"))
+	options.console = newConsole(cancel, options.DisableBrowser)
+	var recorder *diagnostics.Recorder
+	var restoreLogger func()
+	defer func() {
+		cancel()
+		returnedErr = finishRun(options.console, recorder, restoreLogger, returnedErr)
+	}()
+	enableDiagnostics := func() error {
+		if recorder != nil {
+			return nil
+		}
+		var err error
+		recorder, err = openDiagnostics(options.LogDir)
+		if err != nil {
+			return fmt.Errorf("Piik App diagnostics are unavailable: %w", err)
+		}
+		recorder.Context("build", map[string]any{"version": buildVersion(), "revision": BuildRevision})
+		previous, previousWriter, previousFlags := slog.Default(), log.Writer(), log.Flags()
+		var dependencyLog *diagnostics.LineWriter
+		restoreLogger = func() {
+			_ = dependencyLog.Close()
+			slog.SetDefault(previous)
+			log.SetOutput(previousWriter)
+			log.SetFlags(previousFlags)
+		}
+		options.logger = recorder.Logger()
+		slog.SetDefault(options.logger)
+		dependencyLog = diagnostics.Writer("stdlib")
+		log.SetOutput(dependencyLog)
+		log.SetFlags(previousFlags)
+		options.console.send(consoleDebug{logPath: recorder.LogPath(), export: recorder.Export})
+		slog.Debug("piik-client", "event", "diagnostics-enabled")
+		return nil
+	}
+	if options.Debug {
+		if err := enableDiagnostics(); err != nil {
+			return err
+		}
+	}
+	slog.Debug("piik-client", "event", "start", "version", buildVersion(), "revision", BuildRevision)
+	options.console.show(consoleView{state: "starting"})
+	if err := validateMode(options); err != nil {
+		return err
+	}
+	if options.Port == 0 {
+		options.Port = DefaultLocalPort
+	}
+	configPath := strings.TrimSpace(options.ConfigPath)
+	if configPath == "" {
+		var err error
+		configPath, err = appconfig.DefaultPath()
+		if err != nil {
+			return fmt.Errorf("Piik App configuration is unavailable: %w", err)
+		}
+	}
+	config, err := appconfig.LoadOrCreate(configPath)
+	if err != nil {
+		return fmt.Errorf("Piik App configuration is unavailable: %w", err)
+	}
+	config, err = applyMode(config, options)
+	if err != nil {
+		return err
+	}
+	slog.Debug("piik-client", "event", "configuration", "siteConfigured", config.Site != "", "localAccessProtected", config.LocalAccessPassword != "")
+	if options.SiteSet {
+		if err = appconfig.Save(configPath, config); err != nil {
+			return fmt.Errorf("Piik App configuration is unavailable: %w", err)
+		}
+	}
+	nativeMedia := discoverNativeMedia(ctx, options.CaptureProcess)
+	nativeMedia.settingsPath = launcher.HostSettingsPath(configPath)
+	recordContext := func(selected Options, config appconfig.Config) {
+		if recorder == nil {
+			return
+		}
+		recorder.Context("configuration", map[string]any{"siteConfigured": config.Site != "", "local": selected.Local,
+			"link": selected.Link, "port": selected.Port, "lanAddress": selected.LANAddress,
+			"localAccessProtected": config.LocalAccessPassword != ""})
+		recorder.Context("capture", nativeMedia.capture)
+		recorder.Binary("captureExecutable", nativeMedia.captureProcess)
+		slog.Debug("piik-client", "event", "native-capabilities",
+			"video", nativeMedia.capabilities.Video, "processAudio", nativeMedia.capabilities.ProcessAudio,
+			"systemAudio", nativeMedia.capabilities.SystemAudio, "hardwareH264", nativeMedia.capabilities.HardwareH264,
+			"softwareVP8", nativeMedia.capabilities.SoftwareVP8, diagnostics.Error(nativeMedia.discoveryErr))
+	}
+	recordContext(options, config)
+	control, err := loopback.Start(ctx, loopback.Options{
+		AllowedOrigins: allowedOrigins(config.Site, options.Port),
+		NativeMedia:    nativeMedia.capabilities,
+		NewControl:     nativeMedia.controlFactory(),
+		Presentation:   options.console.setLanguage,
+	})
+	if err != nil {
+		return fmt.Errorf("Piik App native control could not start: %w", err)
+	}
+	defer func() { returnedErr = errors.Join(returnedErr, control.Close()) }()
+	slog.Debug("piik-client", "event", "control-ready")
+	if options.console.machine {
+		if err = printEndpoint(control.Endpoint()); err != nil {
+			return err
+		}
+	}
+	if !explicitMode(options) {
+		return runLauncher(ctx, options, configPath, config, control, func(selected *Options, config appconfig.Config) error {
+			if selected.Debug {
+				if err := enableDiagnostics(); err != nil {
+					return err
+				}
+				selected.logger = recorder.Logger()
+			}
+			recordContext(*selected, config)
+			return nil
+		})
+	}
+	return runConfigured(ctx, options, config, control)
+}
+
+func finishRun(console *console, recorder *diagnostics.Recorder, restoreLogger func(), err error) error {
+	err = errors.Join(err, console.stop(err))
+	exportPath := ""
+	if recorder != nil {
+		slog.Debug("piik-client", "event", "stopped", "failed", err != nil, diagnostics.Error(err))
+		if console.program == nil || err != nil {
+			path, exportErr := recorder.Export()
+			console.send(consoleExportResult{path: path, err: exportErr})
+			err = errors.Join(err, exportErr)
+		}
+		restoreLogger()
+		err = errors.Join(err, recorder.Close())
+		exportPath = recorder.LastExportPath()
+	}
+	console.finish(err, exportPath)
+	return err
+}
+
+func explicitMode(options Options) bool {
+	return options.SiteSet || options.Local || options.Link || options.DisableBrowser
+}
+
+func runConfigured(
+	ctx context.Context,
+	options Options,
+	config appconfig.Config,
+	control *loopback.Server,
+) error {
+	if config.Site != "" && !options.Local && !options.Link {
+		return runSite(config.Site, options, control)
+	}
+	return runLocal(ctx, options, config, control)
+}
+
+func runLauncher(
+	ctx context.Context,
+	options Options,
+	configPath string,
+	config appconfig.Config,
+	control *loopback.Server,
+	configureDiagnostics func(*Options, appconfig.Config) error,
+) (returnedErr error) {
+	mode, err := launcher.LoadMode(configPath)
+	if err != nil {
+		slog.Debug("Could not restore the last launcher mode", diagnostics.Error(err))
+	}
+	launch, err := launcher.Start(
+		ctx,
+		webassets.FS(),
+		launcher.Options{
+			DefaultMode: mode,
+			Site:        config.Site, Version: buildVersion(), Revision: BuildRevision,
+			LocalAccessPassword: config.LocalAccessPassword,
+			Debug:               options.Debug, LANAddress: options.LANAddress,
+		},
+	)
+	if err != nil {
+		return err
+	}
+	defer launch.Close()
+	launchAddress, err := url.Parse(launch.URL())
+	if err != nil {
+		return err
+	}
+	control.SetAllowedOrigins(append(
+		allowedOrigins(config.Site, options.Port),
+		launchAddress.Scheme+"://"+launchAddress.Host,
+	))
+	options.console.show(consoleView{state: "setup", entry: launch.URL()})
+	options.console.openBrowser(launch.URL())
+
+	var selection launcher.Selection
+	select {
+	case selection = <-launch.Selection():
+	case <-ctx.Done():
+		return nil
+	case err = <-launch.Done():
+		if err != nil {
+			return fmt.Errorf("Piik App launcher stopped unexpectedly: %w", err)
+		}
+		return nil
+	}
+	options.console.setLanguage(selection.Language)
+	if err := launcher.SaveMode(configPath, selection.Mode); err != nil {
+		slog.Debug("Could not save the launcher mode", diagnostics.Error(err))
+	}
+	if selection.Mode == launcher.ModeSite {
+		config.Site = selection.Site
+	} else {
+		config.LocalAccessPassword = selection.LocalAccessPassword
+	}
+	options.Local = selection.Mode == launcher.ModeLocal
+	options.Link = selection.Mode == launcher.ModeLink
+	options.Debug = options.Debug || selection.Debug
+	if selection.LANAddress != nil {
+		options.LANAddress = *selection.LANAddress
+	}
+	if err = configureDiagnostics(&options, config); err != nil {
+		launch.SetResult("", err)
+		<-launch.Handled()
+		return err
+	}
+	if err = appconfig.Save(configPath, config); err != nil {
+		err = fmt.Errorf("Piik App configuration could not be saved: %w", err)
+		launch.SetResult("", err)
+		<-launch.Handled()
+		return err
+	}
+	control.SetAllowedOrigins(allowedOrigins(config.Site, options.Port))
+	options.DisableBrowser = true
+	ready := make(chan string, 1)
+	options.Ready = func(target string) { ready <- target }
+	runtimeContext, cancelRuntime := context.WithCancel(ctx)
+	runtimeDone := make(chan struct{})
+	var runtimeErr error
+	go func() {
+		runtimeErr = runConfigured(runtimeContext, options, config, control)
+		close(runtimeDone)
+	}()
+	defer func() {
+		cancelRuntime()
+		<-runtimeDone
+		returnedErr = errors.Join(returnedErr, runtimeErr)
+	}()
+
+	select {
+	case target := <-ready:
+		launch.SetResult(target, nil)
+	case <-runtimeDone:
+		launch.SetResult("", runtimeErr)
+		<-launch.Handled()
+		return nil
+	case <-ctx.Done():
+		launch.SetResult("", ctx.Err())
+		return nil
+	}
+
+	select {
+	case <-launch.Handled():
+		_ = launch.Close()
+	case <-runtimeDone:
+		return nil
+	case <-ctx.Done():
+		return nil
+	}
+	select {
+	case <-runtimeDone:
+		return nil
+	case <-ctx.Done():
+		return nil
+	}
+}
+
+func applyMode(config appconfig.Config, options Options) (appconfig.Config, error) {
+	if options.SiteSet && options.Local {
+		return appconfig.Config{}, errors.New("choose either --site or --local")
+	}
+	if options.SiteSet {
+		var err error
+		config.Site, err = appconfig.NormalizeSite(options.Site)
+		if err != nil || config.Site == "" {
+			return appconfig.Config{}, errors.New("Piik Site must be an HTTP or HTTPS origin")
+		}
+	}
+	return config, nil
+}
+
+func validateMode(options Options) error {
+	if options.Link && (options.SiteSet || options.Local) {
+		return errors.New("--link is a self-contained Local mode")
+	}
+	return nil
+}
+
+func debugEnabled(value string) bool {
+	for _, component := range strings.Split(value, ",") {
+		if strings.TrimSpace(component) == "client" {
+			return true
+		}
+	}
+	return false
+}
+
+func openDiagnostics(directory string) (*diagnostics.Recorder, error) {
+	if directory = strings.TrimSpace(directory); directory == "" {
+		directory = strings.TrimSpace(os.Getenv("PIIK_LOG_DIR"))
+	}
+	if directory != "" {
+		return diagnostics.Open(directory, "client", BuildRevision)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	recorder, err := diagnostics.Open(filepath.Join(filepath.Dir(executable), "logs"), "client", BuildRevision)
+	if err == nil || !errors.Is(err, os.ErrPermission) && !errors.Is(err, syscall.EROFS) {
+		return recorder, err
+	}
+	cache, cacheErr := os.UserCacheDir()
+	if cacheErr != nil {
+		return nil, errors.Join(err, cacheErr)
+	}
+	return diagnostics.Open(filepath.Join(cache, "Piik", "logs"), "client", BuildRevision)
+}
+
+// runSite opens the configured Piik Site in the Browser and waits for the
+// loopback server, which is the only thing this mode owns. It takes no context:
+// cancellation reaches it through control.Done().
+func runSite(site string, options Options, control *loopback.Server) error {
+	var err error
+	slog.Debug("piik-client", "event", "mode", "mode", "site")
+	targetURL := launchURL(site)
+	view := consoleView{mode: "site", state: "ready", entry: targetURL}
+	options.console.show(view)
+	if options.console.machine {
+		fmt.Printf("Piik Site: %s\n", site)
+	}
+	if !options.DisableBrowser {
+		options.console.openBrowser(targetURL)
+	} else if options.Ready != nil {
+		options.Ready(targetURL)
+	}
+	slog.Debug("piik-client", "event", "site-ready")
+	if err = <-control.Done(); err != nil {
+		return fmt.Errorf("Piik App native control stopped unexpectedly: %w", err)
+	}
+	return nil
+}
+
+func runLocal(ctx context.Context, options Options, config appconfig.Config,
+	control *loopback.Server,
+) (returnedErr error) {
+	view := consoleView{mode: "local", state: "starting", protected: config.LocalAccessPassword != ""}
+	if options.Link {
+		view.mode = "link"
+	}
+	slog.Debug("piik-client", "event", "mode", "mode", view.mode)
+	options.console.show(view)
+	listener, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.IPv4zero, Port: options.Port})
+	if err != nil {
+		return fmt.Errorf("local server port is unavailable: %w", err)
+	}
+	defer func() {
+		if listener != nil {
+			_ = listener.Close()
+		}
+	}()
+	addresses, lanErr := lan.Addresses()
+	selectedAddress := ""
+	if lanErr == nil {
+		selectedAddress, lanErr = lan.Select(addresses, options.LANAddress)
+	}
+	// A public invitation only needs the tunnel origin; keep any resolved LAN
+	// addresses as allowed local origins but never block link startup on LAN
+	// selection (multi-interface hosts may not have one obvious address).
+	if lanErr != nil && !options.Link {
+		return lanErr
+	}
+	var tunnel *publictunnel.Process
+	publicOrigin := ""
+	if options.Link {
+		tunnel, err = publictunnel.Start(
+			ctx,
+			tunnelExecutable(options.TunnelProcess),
+			fmt.Sprintf("http://127.0.0.1:%d", options.Port),
+		)
+		if err != nil {
+			// Only the caller's clean cancellation is a normal stopped outcome.
+			// A startup or retirement failure racing cancellation remains an error.
+			if err == context.Canceled && ctx.Err() == context.Canceled {
+				return nil
+			}
+			return err
+		}
+		defer func() { returnedErr = errors.Join(returnedErr, tunnel.Close()) }()
+		publicOrigin = tunnel.Origin()
+		slog.Debug("piik-client", "event", "public-link-ready")
+	}
+
+	stunURLs, natPredictionStunURLs := localSTUNURLs(options.Link)
+	localConfig, err := serverconfig.Local(serverconfig.LocalOptions{
+		Port:                  options.Port,
+		PublicAddress:         selectedAddress,
+		PublicOrigin:          publicOrigin,
+		AllowedAddresses:      addresses,
+		SiteAccessPassword:    config.LocalAccessPassword,
+		STUNURLs:              stunURLs,
+		NATPredictionSTUNURLs: natPredictionStunURLs,
+	})
+	if err != nil {
+		return err
+	}
+	logger := options.logger
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(options.console.logWriter(), nil))
+	}
+	localServer, err := serverapp.New(serverapp.Options{
+		Config:   localConfig,
+		Listener: listener,
+		Assets:   webassets.FS(),
+		Logger:   logger,
+	})
+	if err != nil {
+		return err
+	}
+	listener = nil // Ownership is now in the application's startup/shutdown path.
+	defer func() { returnedErr = errors.Join(returnedErr, endLocalServer(localServer)) }()
+	if _, err = localServer.Listen(ctx); err != nil {
+		return err
+	}
+	slog.Debug("piik-client", "event", "local-server-ready", "port", options.Port, "publicLink", publicOrigin != "")
+
+	// The readiness lines follow the listener, which the packaged smoke and the
+	// public-link gate both read from stdout before they probe the port.
+	if options.console.machine {
+		if config.LocalAccessPassword == "" {
+			fmt.Println("Local access: open")
+		} else {
+			fmt.Printf("Local access password: %s\n", config.LocalAccessPassword)
+		}
+		if publicOrigin != "" {
+			fmt.Printf("Public invitation origin: %s\n", publicOrigin)
+		} else {
+			fmt.Printf("LAN invitation origin: http://%s:%d\n", selectedAddress, options.Port)
+		}
+	}
+	launchURL := launchURLWithLocalAccess(
+		fmt.Sprintf("http://127.0.0.1:%d/", options.Port),
+		config.LocalAccessPassword,
+	)
+	view.state, view.entry, view.invite = "ready", launchURL, publicOrigin
+	if view.invite == "" {
+		view.invite = fmt.Sprintf("http://%s:%d", selectedAddress, options.Port)
+	}
+	options.console.show(view)
+	if !options.DisableBrowser {
+		options.console.openBrowser(launchURL)
+	} else if options.Ready != nil {
+		options.Ready(launchURL)
+	}
+	var tunnelDone <-chan struct{}
+	if tunnel != nil {
+		tunnelDone = tunnel.Done()
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil
+	case err = <-control.Done():
+		if err != nil {
+			return fmt.Errorf("Piik App native control stopped unexpectedly: %w", err)
+		}
+		return nil
+	case <-tunnelDone:
+		if ctx.Err() != nil {
+			return nil
+		}
+		return errors.New("public invitation link stopped; reopen Piik to create a new link")
+	}
+}
+
+func launchURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	fragment, err := url.ParseQuery(parsed.EscapedFragment())
+	if err != nil {
+		return raw
+	}
+	fragment.Set("piik-client", "1")
+	parsed.Fragment, parsed.RawFragment = "", ""
+	return parsed.String() + "#" + fragment.Encode()
+}
+
+func launchURLWithLocalAccess(raw, password string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	fragment, err := url.ParseQuery(parsed.EscapedFragment())
+	if err != nil {
+		return launchURL(raw)
+	}
+	fragment.Del("client-access")
+	if password != "" {
+		fragment.Set("client-access", password)
+	}
+	fragment.Set("piik-client", "1")
+	parsed.Fragment, parsed.RawFragment = "", ""
+	return parsed.String() + "#" + fragment.Encode()
+}
+
+type nativeRuntime struct {
+	capabilities   loopback.NativeMediaCapabilities
+	capture        nativecapture.Capabilities
+	captureProcess string
+	discoveryErr   error
+	settingsPath   string
+}
+
+func (runtime nativeRuntime) controlFactory() func() loopback.ControlSession {
+	return func() loopback.ControlSession {
+		session := nativecontrol.New(runtime.captureProcess, runtime.capture, true)
+		session.SetHostSettingsPath(runtime.settingsPath)
+		return session
+	}
+}
+
+func allowedOrigins(site string, localPort int) []string {
+	origins := []string{
+		fmt.Sprintf("http://localhost:%d", localPort),
+		fmt.Sprintf("http://127.0.0.1:%d", localPort),
+	}
+	if site = strings.TrimSpace(site); site != "" {
+		origins = append(origins, site)
+	}
+	return origins
+}
+
+func discoverNativeMedia(ctx context.Context, configuredPath string) nativeRuntime {
+	path := strings.TrimSpace(configuredPath)
+	if path == "" {
+		path = nativecapture.PackagedExecutable()
+	}
+	capabilities, err := nativecapture.Discover(ctx, path)
+	if err != nil {
+		return nativeRuntime{captureProcess: path, discoveryErr: err,
+			capabilities: loopback.NativeMediaCapabilities{ReceiverReuse: true, HostSettings: true}}
+	}
+	summary := capabilities.Summary()
+	return nativeRuntime{
+		captureProcess: path,
+		capture:        capabilities,
+		capabilities: loopback.NativeMediaCapabilities{
+			ReceiverReuse:         true,
+			Video:                 summary.Video,
+			CaptureBorderControl:  summary.CaptureBorderControl,
+			BitrateModeControl:    summary.BitrateModeControl,
+			Microphone:            summary.Microphone,
+			ProcessAudio:          summary.ProcessAudio,
+			ProcessAudioExclusion: summary.ProcessAudioExclusion,
+			SystemAudio:           summary.SystemAudio,
+			HardwareH264:          summary.HardwareH264,
+			SoftwareVP8:           summary.SoftwareVP8,
+			HardwareAV1:           summary.HardwareAV1,
+			HardwareHEVC:          summary.HardwareHEVC,
+			HostSettings:          true,
+		},
+	}
+}
+
+// localSTUNURLs is the Local room authority's ICE configuration. Only --link
+// has a public path, so only --link configures public STUN and the bounded NAT
+// prediction survey. The lists are literals on purpose: a gate that sets
+// STUN_URLS is configuring the App's own Pion edge, and that value must not
+// reach the room server (which is why serverconfig.Local reads no environment).
+func localSTUNURLs(link bool) (stunURLs []string, natPredictionSTUNURLs []string) {
+	if !link {
+		return nil, nil
+	}
+	return []string{publicSTUNURL},
+		[]string{publicNATPredictionSTUNURLA, publicNATPredictionSTUNURLB}
+}
+
+// endLocalServer is step 1 of the ADR-0010 item 12 unwind: every room ends,
+// signaling closes, the listener drains and the room store closes, all before
+// the tunnel and the loopback server go away. serverapp.End is memoised, so the
+// deferred call after an explicit stop is a no-op. A serve loop or a drain that
+// was already stopping reports http.ErrServerClosed or context.Canceled;
+// neither is an App failure, and Run turns any error into exit status 1,
+// which is exactly what the packaged smoke fails on.
+func endLocalServer(server *serverapp.Server) error {
+	ctx, cancel := context.WithTimeout(context.Background(), localShutdownTimeout)
+	defer cancel()
+	err := server.End(ctx)
+	if errors.Is(err, http.ErrServerClosed) || errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return err
+}
+
+func tunnelExecutable(configured string) string {
+	if path := strings.TrimSpace(configured); path != "" {
+		return filepath.Clean(path)
+	}
+	return publictunnel.PackagedExecutable()
+}
+
+func printEndpoint(endpoint loopback.Endpoint) error {
+	payload, err := json.Marshal(endpoint)
+	if err != nil {
+		return errors.New("Piik App endpoint is unavailable")
+	}
+	fmt.Println(string(payload))
+	return nil
+}

@@ -1,0 +1,161 @@
+// Control hint scenes (操作提示漫画): small explanatory scenes used
+// as hover/focus tooltips in every mode, with captions added by Tooltip.
+// Same cast, palette, 320x96 canvas, and motion
+// constitution as the state comics. Each scene group defines exactly its
+// own HintKind subset — the merge below then proves
+// completeness at compile time. JSX-free shell: this module is also loaded
+// by the tsx preview harness, which uses the classic JSX runtime.
+
+import { createElement, memo, type CSSProperties } from "react";
+import type { HintKind, HintScene, MetricHintKind, InteractionHintKind } from "../../../ui/visual-kinds";
+import { SET1_SCENES } from "./set1";
+import { SET2_SCENES } from "./set2";
+import { SET3_SCENES } from "./set3";
+import { SET4_SCENES } from "./set4";
+import { PLAYBACK_SCENES } from "./playback";
+import { CONTROL_SCENES } from "./controls";
+import { METRIC_SCENES } from "./metrics";
+import { ADMISSION_SCENES } from "./admission";
+import { INTERACTION_SCENES } from "./interactions";
+import { comicStyle, getComicPresentation, type ComicTone, type ComicMotion } from "../comic-presentation";
+
+export type { HintKind, HintScene };
+
+export const HINT_KINDS: readonly HintKind[] = [
+  "hint-share-start",
+  "hint-share-stop",
+  "hint-microphone-on",
+  "hint-microphone-off",
+  "hint-microphone-volume",
+  "hint-microphone-processing",
+  "hint-pause",
+  "hint-resume",
+  "hint-switch-source",
+  "hint-refresh-sources",
+  "hint-source-picker",
+  "hint-no-sources",
+  "hint-show-capture-border",
+  "hint-hide-capture-border",
+  "hint-reconnect",
+  "hint-copy-code",
+  "hint-shuffle-code",
+  "hint-copy-invite",
+  "hint-invite-link",
+  "hint-client-link",
+  "hint-rotate-invite",
+  "hint-revoke-invite",
+  "hint-password",
+  "hint-policy-private",
+  "hint-admission-code",
+  "hint-admission-password",
+  "hint-admission-invite",
+  "hint-quality",
+  "hint-audio-quality",
+  "hint-exclude-audio",
+  "hint-degrade-pref",
+  "hint-prefer-resolution",
+  "hint-prefer-framerate",
+  "hint-codec",
+  "hint-advanced",
+  "hint-details",
+  "hint-debug-export",
+  "hint-more-metrics",
+  "hint-topology",
+  "hint-close",
+  "hint-rename",
+  "hint-theme-light",
+  "hint-theme-dark",
+  "hint-collapse",
+  "hint-password-show",
+  "hint-password-hide",
+  "hint-password-remove",
+  "hint-source-audio",
+  "hint-share-audio",
+  "hint-stop-audio",
+  "hint-share-audio-fixed",
+  "hint-silent-share-fixed",
+  "hint-join-go",
+  "hint-theater",
+  "hint-theater-exit",
+  "hint-route-p2p",
+  "hint-route-p2p-required",
+  "hint-route-sfu",
+  "hint-nat-prediction",
+  "hint-nat-unavailable",
+  "hint-client-local",
+  "hint-client-site",
+  "hint-capture-browser",
+  "hint-capture-camera",
+  "hint-capture-window",
+  "hint-capture-display",
+  "hint-local-play",
+  "hint-local-pause",
+  "hint-volume",
+  "hint-volume-basic",
+  "hint-mute",
+  "hint-unmute",
+  "hint-no-audio",
+  "hint-fullscreen",
+  "hint-fullscreen-exit",
+  "hint-fullscreen-unavailable",
+  "hint-pip",
+  "hint-pip-exit",
+  "hint-pip-unavailable",
+  ...Object.keys(METRIC_SCENES) as MetricHintKind[],
+  ...Object.keys(INTERACTION_SCENES) as InteractionHintKind[],
+];
+
+export const HINT_SCENES: Record<HintKind, HintScene> = {
+  ...SET1_SCENES,
+  ...SET2_SCENES,
+  ...SET3_SCENES,
+  ...SET4_SCENES,
+  ...PLAYBACK_SCENES,
+  ...CONTROL_SCENES,
+  ...METRIC_SCENES,
+  ...ADMISSION_SCENES,
+  ...INTERACTION_SCENES,
+};
+
+const HINT_KIND_SET: ReadonlySet<string> = new Set(HINT_KINDS);
+
+export function isHintKind(kind: string): kind is HintKind {
+  return HINT_KIND_SET.has(kind);
+}
+
+/** All hint scenes are paper idioms: they float on a paper tooltip. */
+export const HintComic = memo(function HintComic({
+  kind,
+  size,
+  tone,
+  motion,
+}: {
+  kind: HintKind;
+  size?: number;
+  tone?: ComicTone;
+  motion?: ComicMotion;
+}) {
+  const defaults = getComicPresentation(kind);
+  const resolvedTone = tone ?? defaults.tone;
+  const resolvedMotion = motion ?? defaults.motion;
+  const style: CSSProperties = {
+    ...comicStyle(resolvedTone, resolvedMotion),
+    width: size != null ? `${size}px` : "min(320px, 86%)",
+    height: "auto",
+    display: "block",
+  };
+  return createElement(
+    "svg",
+    {
+      key: kind,
+      viewBox: "0 0 320 96",
+      "data-comic-tone": resolvedTone,
+      "data-comic-motion": resolvedMotion,
+      style,
+      "aria-hidden": true,
+      focusable: false,
+      xmlns: "http://www.w3.org/2000/svg",
+    },
+    createElement("g", { className: "lr-comic-content" }, HINT_SCENES[kind]({ theme: "paper" })),
+  );
+});

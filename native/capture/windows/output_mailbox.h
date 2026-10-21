@@ -1,0 +1,117 @@
+#pragma once
+
+#include <condition_variable>
+#include <cstdint>
+#include <deque>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <stdexcept>
+#include <utility>
+
+namespace piik::capture {
+
+// One codec worker consumes raw inputs in order. A short queue absorbs a brief
+// encoder or GPU stall without dropping frames (one replaceable slot lost about
+// one frame in twenty-five at 120 fps); a sustained stall drops the oldest.
+template <typename Frame>
+class OutputMailbox final {
+ public:
+  static constexpr size_t kDepth = 4;  // about 33 ms at 120 fps
+  enum class Action { frame, retire, stop };
+  struct Work final {
+    Action action = Action::stop;
+    std::shared_ptr<const Frame> input;
+    uint64_t generation = 0;
+    uint32_t bitrate = 0;
+    bool recovery = false;
+  };
+
+  explicit OutputMailbox(uint32_t ceiling, bool active = true)
+      : ceiling_(ceiling), bitrate_(ceiling), active_(active) {}
+
+  void Submit(std::shared_ptr<const Frame> input) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (active_ && !stopped_ && !failed_) {
+      if (pending_.size() == kDepth) pending_.pop_front();
+      pending_.push_back(std::move(input));
+      changed_.notify_one();
+    }
+  }
+
+  Work Take() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    changed_.wait(lock, [&]() { return stopped_ || retire_ || !pending_.empty(); });
+    if (stopped_) return {};
+    if (retire_) {
+      retire_ = false;
+      return {Action::retire, {}, generation_, bitrate_, false};
+    }
+    auto input = std::move(pending_.front());
+    pending_.pop_front();
+    return {Action::frame, std::move(input), generation_, bitrate_,
+            std::exchange(key_requested_, false)};
+  }
+
+  // Only a fresh activation needs a retained capture frame.
+  bool SetActive(bool active) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (active_ == active || failed_) return false;
+    active_ = active;
+    ++generation_;
+    key_requested_ = true;
+    if (!active) {
+      pending_.clear();
+      retire_ = true;
+    }
+    changed_.notify_one();
+    return active;
+  }
+
+  void RequestKeyFrame() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    key_requested_ = true;
+  }
+
+  void SetBitrate(uint32_t bitrate) {
+    if (bitrate < 1'000 || bitrate > ceiling_) throw std::runtime_error("Output bitrate exceeds its codec bounds");
+    std::lock_guard<std::mutex> lock(mutex_);
+    bitrate_ = bitrate;
+  }
+
+  bool Accept(uint64_t generation) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return !stopped_ && !failed_ && active_ && generation == generation_;
+  }
+
+  bool Fail(std::optional<uint64_t> generation = std::nullopt) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stopped_ || failed_ ||
+        (generation && (!active_ || *generation != generation_))) return false;
+    failed_ = true;
+    pending_.clear();
+    return true;
+  }
+
+  void Stop() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    stopped_ = true;
+    pending_.clear();
+    changed_.notify_one();
+  }
+
+ private:
+  const uint32_t ceiling_;
+  std::mutex mutex_;
+  std::condition_variable changed_;
+  std::deque<std::shared_ptr<const Frame>> pending_;
+  uint32_t bitrate_;
+  uint64_t generation_ = 0;
+  bool active_ = true;
+  bool stopped_ = false;
+  bool failed_ = false;
+  bool retire_ = false;
+  bool key_requested_ = true;
+};
+
+}  // namespace piik::capture

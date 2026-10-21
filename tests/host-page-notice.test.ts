@@ -1,0 +1,146 @@
+import { describe, expect, it } from "vitest";
+
+import { setCopy } from "../src/client/ui/copy.ts";
+import { NativeMediaBridgeError, NativeMediaBridgeInitializationError } from "../src/client/native/media-bridge";
+import { NativeRequestError } from "../src/client/native/client";
+import {
+  hostActionErrorNotice,
+  hostFailureCode,
+  hostFailureChecks,
+  hostServerErrorNotice,
+  shouldPauseLocalPreview,
+  sourceSwitchNotice,
+} from "../src/client/pages/host-page-notices.ts";
+
+setCopy({ lang: "zh" });
+
+describe("host error notices", () => {
+  it("keeps known App failure boundaries and support context without claiming a driver diagnosis", () => {
+    const rejected = new NativeRequestError("rejected", "start-share", { cause: "private source title" });
+    const timeout = new NativeRequestError("timeout", "start-share");
+    const disconnected = new NativeRequestError("disconnected", "start-share");
+    expect(hostActionErrorNotice(rejected, "capture")).toContain("未能采集所选来源");
+    expect(hostActionErrorNotice(timeout, "capture")).toContain("响应超时");
+    expect(hostActionErrorNotice(disconnected, "capture")).toContain("连接已断开");
+    expect(hostFailureCode(rejected, "capture")).toBe("app/start-share/rejected");
+    expect(hostFailureCode(new Error("secret invitation and source"), "capture")).toBe("capture/unknown");
+    expect(hostFailureCode(new DOMException("secret", "UnrecognizedError"), "capture")).toBe("capture/unknown");
+    expect(hostFailureCode(new DOMException("secret", "NotAllowedError"), "capture", "camera")).toBe("camera/NotAllowedError");
+  });
+
+  it.each([
+    ["site/http-403", ["shareHelp.site"]],
+    ["room/unknown", ["shareHelp.site"]],
+    ["app/start-share/rejected", ["shareHelp.source", "shareHelp.compare"]],
+    ["app/start-share/timeout", ["shareHelp.appConnection"]],
+    ["app/control/disconnected", ["shareHelp.appConnection"]],
+    ["app/prepare-edge/disconnected", ["shareHelp.appConnection"]],
+    ["app/prepare-edge/rejected", ["shareHelp.mediaConnection"]],
+    ["app/browser-media/connection", ["shareHelp.mediaConnection"]],
+    ["app/capture/failed", ["shareHelp.source", "shareHelp.compare"]],
+    ["browser/NotAllowedError", ["shareHelp.permission"]],
+    ["browser/NotReadableError", ["shareHelp.source"]],
+    ["camera/NotAllowedError", ["shareHelp.camera"]],
+    ["status/unknown", []],
+    ["connection/unknown", []],
+    ["quality/unknown", []],
+    ["app/update-share/rejected", []],
+  ])("keeps troubleshooting relevant to %s", (code, checks) => {
+    expect(hostFailureChecks(code as string)).toEqual(checks);
+  });
+  it.each([
+    ["zh", "浏览器无法建立媒体连接，请刷新页面重试。"],
+    ["en", "The browser could not create a media connection; reload to retry."],
+  ] as const)("identifies Browser initialization failure in %s without blaming capture permission", (lang, notice) => {
+    setCopy({ lang });
+    try {
+      const failure = new NativeMediaBridgeInitializationError("private detail", {
+        cause: new DOMException("private cause", "NotAllowedError"),
+      });
+      expect(hostActionErrorNotice(failure, "capture")).toBe(notice);
+    } finally {
+      setCopy({ lang: "zh" });
+    }
+  });
+
+  it("classifies the native preview bridge as a connection failure", () => {
+    expect(hostActionErrorNotice(new NativeMediaBridgeError("private detail"), "capture"))
+      .toBe("Piik App 媒体连接失败");
+  });
+
+  it("maps every server error code without exposing server text", () => {
+    const notices = {
+      AUTH_REQUIRED: "站点访问已失效，请重新验证",
+      INVALID_MESSAGE: "页面版本已更新，请刷新后重试",
+      INVALID_TOKEN: "分享凭证已失效，请重新创建房间",
+      ROOM_NOT_FOUND: "房间不存在",
+      ROOM_ACCESS_DENIED: "当前操作没有权限",
+      ROOM_FULL: "房间已满",
+      HOST_ALREADY_CONNECTED: "此房间已在另一个页面中分享",
+      PEER_NOT_FOUND: "对应的观看连接已经离开",
+      FORBIDDEN: "当前操作不可用",
+      SERVER_ERROR: "服务暂时不可用，请稍后重试",
+    } as const;
+
+    for (const [code, notice] of Object.entries(notices)) {
+      expect(
+        hostServerErrorNotice(code as keyof typeof notices),
+      ).toBe(notice);
+      expect(notice).not.toContain("server-internal-sentinel");
+    }
+  });
+
+  it("uses stable action messages instead of arbitrary exception text", () => {
+    const sentinel = new Error("browser-internal-sentinel");
+    expect(hostActionErrorNotice(sentinel, "quality")).toBe(
+      "应用画质设置失败",
+    );
+    expect(hostActionErrorNotice(sentinel, "connection")).toBe(
+      "观看连接处理失败",
+    );
+    expect(hostActionErrorNotice(sentinel, "room")).toBe("房间操作失败");
+    expect(hostActionErrorNotice(sentinel, "source")).toBe("切换分享来源失败");
+    expect(hostActionErrorNotice(sentinel, "sourceAudio")).toBe("未能更新来源声音，请重试");
+  });
+
+  it.each([
+    ["NotAllowedError", "屏幕选择已取消或没有共享权限"],
+    ["NotFoundError", "没有可用的屏幕分享来源"],
+    ["NotReadableError", "无法读取所选分享来源，请重新选源"],
+    ["SecurityError", "当前页面无法启动屏幕分享"],
+    ["InvalidStateError", "请回到当前页面，再点击分享并选择来源。"],
+    ["OverconstrainedError", "所选来源无法满足当前画面设置。请降低设置或换一个来源。"],
+  ])("maps capture DOMException %s", (name, notice) => {
+    expect(
+      hostActionErrorNotice(new DOMException("raw-browser-text", name), "capture"),
+    ).toBe(notice);
+  });
+});
+
+describe("shouldPauseLocalPreview", () => {
+  it("distinguishes local preview suspension from active focus", () => {
+    expect(shouldPauseLocalPreview("hidden", true)).toBe(true);
+    expect(shouldPauseLocalPreview("visible", false)).toBe(true);
+    expect(shouldPauseLocalPreview("visible", true)).toBe(false);
+  });
+});
+
+describe("sourceSwitchNotice", () => {
+  it("does not report success when the SFU source replacement failed", () => {
+    expect(
+      sourceSwitchNotice({
+        failedPeerCount: 0,
+        sfuReplaced: false,
+      }),
+    ).toBe("服务器中转的画面来源未切换成功，正在恢复观看连接");
+  });
+
+  it("reports success only when every active route replacement succeeded", () => {
+    expect(
+      sourceSwitchNotice({
+        failedPeerCount: 0,
+        sfuReplaced: true,
+      }),
+    ).toBe("分享来源已切换");
+  });
+});

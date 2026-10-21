@@ -1,0 +1,1200 @@
+package nativecontrol
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"github.com/TNTcraftHIM/Piik/internal/app/launcher"
+	"io"
+	"log/slog"
+	"math"
+	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+	"unicode"
+
+	"github.com/TNTcraftHIM/Piik/internal/app/loopback"
+	"github.com/TNTcraftHIM/Piik/internal/app/mediaedge"
+	"github.com/TNTcraftHIM/Piik/internal/app/nativecapture"
+	"github.com/TNTcraftHIM/Piik/internal/app/nativehost"
+	"github.com/TNTcraftHIM/Piik/internal/app/nativeviewer"
+	"github.com/TNTcraftHIM/Piik/internal/diagnostics"
+	"github.com/TNTcraftHIM/Piik/internal/server/protocol"
+	"github.com/pion/webrtc/v4"
+)
+
+const (
+	maxSDPUnits       = 48 * 1024
+	maxCandidateUnits = 4096
+	maxSTUNURLBytes   = 512
+	maxICEServers     = 8
+	maxURLsPerServer  = 8
+	maxEdgeCapacity   = 3
+)
+
+var identityPattern = regexp.MustCompile("^[A-Za-z0-9_-]{8,256}$")
+
+type Session struct {
+	// hostSettingsPath stores the Host's remembered settings; empty disables it.
+	hostSettingsPath string
+	captureProcess   string
+	capabilities     nativecapture.Capabilities
+	portMapping      bool
+	ctx              context.Context
+	cancel           context.CancelFunc
+	events           chan any
+	viewerEvents     chan nativeviewer.Event
+
+	mu          sync.Mutex
+	host        *nativehost.Session
+	viewer      *nativeviewer.Session
+	closed      bool
+	updateDone  chan struct{}
+	startID     string
+	startCancel context.CancelFunc
+}
+
+type outboundMediaSession interface {
+	SetAnswer(string, webrtc.SessionDescription) error
+	AddCandidate(string, *webrtc.ICECandidateInit) error
+	CloseEdge(string)
+}
+
+func New(
+	captureProcess string,
+	capabilities nativecapture.Capabilities,
+	portMapping bool,
+) *Session {
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &Session{
+		captureProcess: captureProcess,
+		capabilities:   capabilities,
+		portMapping:    portMapping,
+		ctx:            ctx,
+		cancel:         cancel,
+		events:         make(chan any, 256),
+		viewerEvents:   make(chan nativeviewer.Event, 256),
+	}
+	go session.relayEvents()
+	return session
+}
+
+// SetHostSettingsPath enables remembered Host settings for this control session.
+func (session *Session) SetHostSettingsPath(path string) {
+	session.hostSettingsPath = path
+}
+
+func (session *Session) Events() <-chan any {
+	return session.events
+}
+
+type protocolViolation string
+
+func (err protocolViolation) Error() string { return string(err) }
+
+// Malformed commands close the control connection. Valid commands that cannot
+// complete fail only their request; an already-retired teardown target is ACKed.
+func (session *Session) Handle(ctx context.Context, payload []byte) (result any, returnedErr error) {
+	var envelope requestEnvelope
+	if err := decodeEnvelope(payload, &envelope); err != nil {
+		return nil, err
+	}
+	complete := session.traceRequest(envelope, payload)
+	asynchronous := false
+	defer func() {
+		var invalid protocolViolation
+		if returnedErr != nil && !errors.As(returnedErr, &invalid) {
+			result = operationFailure(envelope, returnedErr)
+			returnedErr = nil
+		}
+		if !asynchronous {
+			complete(result, returnedErr)
+		}
+	}()
+	switch envelope.Type {
+	case "prepare-publication", "publication-media", "publication-answer", "publication-candidate", "publication-layers", "close-publication":
+		return session.handlePublication(envelope, payload)
+	case "get-host-settings":
+		var request requestEnvelope
+		if err := decodeStrict(payload, &request); err != nil || request.Type != envelope.Type {
+			return nil, protocolViolation("native get-host-settings request is invalid")
+		}
+		settings := json.RawMessage(nil)
+		if session.hostSettingsPath != "" {
+			settings = launcher.LoadHostSettings(session.hostSettingsPath)
+		}
+		return hostSettingsResponse{responseEnvelope: response(envelope, "host-settings"), Settings: settings}, nil
+	case "save-host-settings":
+		var request saveHostSettingsRequest
+		if err := decodeStrict(payload, &request); err != nil || request.Type != envelope.Type {
+			return nil, protocolViolation("native save-host-settings request is invalid")
+		}
+		if session.hostSettingsPath == "" {
+			return nil, errors.New("remembered settings are unavailable")
+		}
+		if err := launcher.SaveHostSettings(session.hostSettingsPath, request.Settings); err != nil {
+			return nil, err
+		}
+		return response(envelope, "host-settings-saved"), nil
+	case "capture-options":
+		var request captureOptionsRequest
+		if err := decodeStrict(payload, &request); err != nil || request.Type != envelope.Type {
+			return nil, protocolViolation("native capture-options request is invalid")
+		}
+		return captureOptionsResponse{
+			responseEnvelope: response(envelope, "capture-options"),
+			Adapters:         session.capabilities.Adapters,
+		}, nil
+	case "list-microphones":
+		var request requestEnvelope
+		if err := decodeStrict(payload, &request); err != nil {
+			return nil, protocolViolation("native microphone list request is invalid")
+		}
+		if !session.capabilities.Microphone {
+			return operationFailure(envelope, errors.New("native microphone is unavailable")), nil
+		}
+		devices, err := nativecapture.ListMicrophones(ctx, session.captureProcess)
+		if err != nil {
+			return operationFailure(envelope, err), nil
+		}
+		return struct {
+			responseEnvelope
+			Devices []nativecapture.Microphone `json:"devices"`
+		}{response(envelope, "microphone-list"), devices}, nil
+	case "list-sources":
+		var request listSourcesRequest
+		if err := decodeStrict(payload, &request); err != nil || request.Type != envelope.Type {
+			return nil, protocolViolation("native list-sources request is invalid")
+		}
+		targets, err := nativecapture.ListSources(ctx, session.captureProcess)
+		if err != nil {
+			return operationFailure(envelope, err), nil
+		}
+		return sourceListResponse{
+			responseEnvelope: response(envelope, "source-list"),
+			Sources:          targets,
+		}, nil
+	case "source-preview":
+		var request sourcePreviewRequest
+		if err := decodeStrict(payload, &request); err != nil || request.Type != envelope.Type {
+			return nil, protocolViolation("native source-preview request is invalid")
+		}
+		preview, err := nativecapture.PreviewSource(
+			ctx,
+			session.captureProcess,
+			request.Source,
+		)
+		data := ""
+		if err == nil {
+			data = base64.StdEncoding.EncodeToString(preview)
+		} else {
+			operationFailure(envelope, err)
+		}
+		return sourcePreviewResponse{
+			responseEnvelope: response(envelope, "source-preview"),
+			SourceKey:        captureTargetKey(request.Source),
+			Mime:             "image/bmp",
+			Data:             data,
+		}, nil
+	case "start-share":
+		var request startShareRequest
+		if err := decodeStrict(payload, &request); err != nil ||
+			request.Type != envelope.Type ||
+			!identityPattern.MatchString(request.ShareID) ||
+			!request.Source.Valid() ||
+			request.EdgeCapacity < 1 || request.EdgeCapacity > maxEdgeCapacity ||
+			(request.Codec != "auto" && request.Codec != "h264" && request.Codec != "vp8" && request.Codec != "av1" && request.Codec != "h265") ||
+			!validQualitySettings(request.Profile) {
+			return nil, protocolViolation("native start-share request is invalid")
+		}
+		if err := session.validateAudioExclusion(request.Source, request.Audio, request.ExcludeAudio); err != nil {
+			return nil, err
+		}
+		if request.ExcludeAudio != nil && !request.MicrophoneMixing {
+			return nil, errors.New("native audio exclusion requires mixed audio")
+		}
+		slog.Debug("piik-client", "event", "native-profile-requested", "requestId", envelope.ID,
+			"share", diagnostics.ID(request.ShareID), "profile", nativeQualityProfile(request.Profile), "codec", request.Codec, "audio", request.Audio,
+			"sourceKind", request.Source.Kind, "adapterIndex", request.AdapterIndex, "encoderIndex", request.EncoderIndex)
+		result = session.beginShare(ctx, envelope, request, complete)
+		asynchronous = result == nil
+		return result, nil
+	case "set-microphone":
+		var request microphoneRequest
+		if err := decodeStrict(payload, &request); err != nil || !validIdentities(request.ShareID) ||
+			(request.Enabled == nil && request.Volume == nil && request.DeviceID == nil) ||
+			(request.DeviceID != nil && !nativecapture.ValidDeviceID(*request.DeviceID)) ||
+			(request.Volume != nil && (math.IsNaN(*request.Volume) || math.IsInf(*request.Volume, 0) || *request.Volume < 0 || *request.Volume > 2)) {
+			return nil, protocolViolation("native microphone request is invalid")
+		}
+		host := session.current(request.ShareID)
+		if host == nil {
+			return nil, errors.New("native share does not exist")
+		}
+		// Commit gain in command order; asynchronous device setup must not later
+		// overwrite a newer slider value received while permission was pending.
+		if request.Volume != nil {
+			if err := host.SetMicrophone(nil, request.Volume, nil); err != nil {
+				return nil, err
+			}
+		}
+		if request.Enabled == nil && request.DeviceID == nil {
+			return response(envelope, "microphone-set"), nil
+		}
+		result = session.runHostOperation(host, envelope, func() (any, error) {
+			err := host.SetMicrophone(request.Enabled, nil, request.DeviceID)
+			return response(envelope, "microphone-set"), err
+		}, complete)
+		asynchronous = result == nil
+		return result, nil
+	case "update-share":
+		var request updateShareRequest
+		if err := decodeStrict(payload, &request); err != nil ||
+			request.Type != envelope.Type ||
+			!validIdentities(request.ShareID) ||
+			!validQualitySettings(request.Profile) {
+			return nil, protocolViolation("native update-share request is invalid")
+		}
+		profile := session.qualityProfile(request.Profile)
+		slog.Debug("piik-client", "event", "native-profile-requested", "requestId", envelope.ID,
+			"share", diagnostics.ID(request.ShareID), "profile", profile)
+		var err error
+		if host := session.current(request.ShareID); host != nil {
+			result = session.updateHost(host, envelope, request.ShareID, profile, complete)
+			asynchronous = result == nil
+			return result, nil
+		} else if viewer := session.currentViewer(request.ShareID); viewer != nil {
+			err = viewer.UpdateProfile(profile.Video)
+		} else {
+			return nil, errors.New("native share does not exist")
+		}
+		return session.shareUpdateResult(envelope, request.ShareID, profile, nil, err), nil
+	case "replace-share-source":
+		var request replaceShareSourceRequest
+		if err := decodeStrict(payload, &request); err != nil ||
+			request.Type != envelope.Type ||
+			!validIdentities(request.ShareID) || !request.Source.Valid() {
+			return nil, protocolViolation("native replace-share-source request is invalid")
+		}
+		if err := session.validateAudioExclusion(request.Source, request.Audio, request.ExcludeAudio); err != nil {
+			return nil, err
+		}
+		host := session.current(request.ShareID)
+		if host == nil {
+			return nil, errors.New("native share does not exist")
+		}
+		audio := request.Audio && session.capabilities.Summary().AudioFor(
+			request.Source.Kind,
+		)
+		slog.Debug("piik-client", "event", "native-source-requested", "requestId", envelope.ID,
+			"share", diagnostics.ID(request.ShareID), "sourceKind", request.Source.Kind, "audio", audio,
+			"adapterIndex", request.AdapterIndex, "encoderIndex", request.EncoderIndex)
+		result = session.runHostOperation(host, envelope, func() (any, error) {
+			err := host.ReplaceSource(nativecapture.VideoOptions{
+				Target:            request.Source,
+				ShowCaptureBorder: request.ShowCaptureBorder && session.capabilities.CaptureBorderControl,
+				AdapterIndex:      request.AdapterIndex,
+				EncoderIndex:      request.EncoderIndex,
+			}, audio, request.ExcludeAudio)
+			if err != nil {
+				return nil, err
+			}
+			slog.Debug("piik-client", "event", "native-source-applied", "requestId", envelope.ID,
+				"share", diagnostics.ID(request.ShareID), "sourceKind", request.Source.Kind, "audio", audio)
+			return shareSourceReplacedResponse{
+				responseEnvelope: response(envelope, "share-source-replaced"), ShareID: request.ShareID,
+				Video: hostVideoFormat(host),
+			}, nil
+		}, complete)
+		asynchronous = result == nil
+		return result, nil
+	case "prepare-edge":
+		var request prepareEdgeRequest
+		if err := decodeStrict(payload, &request); err != nil ||
+			request.Type != envelope.Type ||
+			!validIdentities(request.ShareID, request.ConnectionID) {
+			return nil, protocolViolation("native prepare-edge request is invalid")
+		}
+		return session.prepareEdge(envelope, request)
+	case "prepare-local-edge":
+		var request prepareLocalEdgeRequest
+		if err := decodeStrict(payload, &request); err != nil ||
+			request.Type != envelope.Type ||
+			!validIdentities(request.ShareID, request.ConnectionID) {
+			return nil, protocolViolation("native prepare-local-edge request is invalid")
+		}
+		return session.prepareLocalEdge(envelope, request)
+	case "receive-offer":
+		var request receiveOfferRequest
+		if err := decodeStrict(payload, &request); err != nil ||
+			request.Type != envelope.Type ||
+			!validIdentities(request.ShareID, request.ConnectionID) ||
+			request.EdgeCapacity < 1 || request.EdgeCapacity > maxEdgeCapacity {
+			return nil, protocolViolation("native receive-offer request is invalid")
+		}
+		if !validSDP(request.SDP) {
+			return nil, errors.New("relayed offer is invalid")
+		}
+		return session.receiveOffer(envelope, request)
+	case "receive-candidate":
+		var request receiveCandidateRequest
+		if err := decodeStrict(payload, &request); err != nil ||
+			request.Type != envelope.Type ||
+			!validIdentities(request.ShareID, request.ConnectionID) {
+			return nil, protocolViolation("native receive-candidate request is invalid")
+		}
+		if !validCandidate(request.Candidate) {
+			return nil, errors.New("relayed candidate is invalid")
+		}
+		viewer := session.currentViewer(request.ShareID)
+		if viewer == nil {
+			return nil, errors.New("native Viewer session does not exist")
+		}
+		if err := viewer.AddReceiverCandidate(request.ConnectionID, request.Candidate); err != nil {
+			return nil, err
+		}
+		return response(envelope, "receive-candidate-accepted"), nil
+	case "close-receiver":
+		var request closeReceiverRequest
+		if err := decodeStrict(payload, &request); err != nil ||
+			request.Type != envelope.Type ||
+			!validIdentities(request.ShareID, request.ConnectionID) {
+			return nil, protocolViolation("native close-receiver request is invalid")
+		}
+		if viewer := session.currentViewer(request.ShareID); viewer != nil {
+			viewer.CloseReceiver(request.ConnectionID)
+		}
+		return response(envelope, "receiver-closed"), nil
+	case "stop-receive":
+		var request stopReceiveRequest
+		if err := decodeStrict(payload, &request); err != nil ||
+			request.Type != envelope.Type || !validIdentities(request.ShareID) {
+			return nil, protocolViolation("native stop-receive request is invalid")
+		}
+		session.stopViewer(request.ShareID)
+		return response(envelope, "receive-stopped"), nil
+	case "edge-answer":
+		var request edgeAnswerRequest
+		if err := decodeStrict(payload, &request); err != nil ||
+			request.Type != envelope.Type ||
+			!validIdentities(request.ShareID, request.ConnectionID) {
+			return nil, protocolViolation("native edge-answer request is invalid")
+		}
+		if !validSDP(request.SDP) {
+			return nil, errors.New("relayed answer is invalid")
+		}
+		media := session.currentMedia(request.ShareID)
+		if media == nil {
+			return nil, errors.New("native media session does not exist")
+		}
+		if err := media.SetAnswer(
+			request.ConnectionID,
+			webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: request.SDP},
+		); err != nil {
+			return nil, err
+		}
+		return response(envelope, "edge-answer-accepted"), nil
+	case "edge-candidate":
+		var request edgeCandidateRequest
+		if err := decodeStrict(payload, &request); err != nil ||
+			request.Type != envelope.Type ||
+			!validIdentities(request.ShareID, request.ConnectionID) {
+			return nil, protocolViolation("native edge-candidate request is invalid")
+		}
+		if !validCandidate(request.Candidate) {
+			return nil, errors.New("relayed candidate is invalid")
+		}
+		media := session.currentMedia(request.ShareID)
+		if media == nil {
+			return nil, errors.New("native media session does not exist")
+		}
+		if err := media.AddCandidate(request.ConnectionID, request.Candidate); err != nil {
+			return nil, err
+		}
+		return response(envelope, "edge-candidate-accepted"), nil
+	case "close-edge":
+		var request closeEdgeRequest
+		if err := decodeStrict(payload, &request); err != nil ||
+			request.Type != envelope.Type ||
+			!validIdentities(request.ShareID, request.ConnectionID) {
+			return nil, protocolViolation("native close-edge request is invalid")
+		}
+		if media := session.currentMedia(request.ShareID); media != nil {
+			media.CloseEdge(request.ConnectionID)
+		}
+		return response(envelope, "edge-closed"), nil
+	case "stop-share":
+		var request stopShareRequest
+		if err := decodeStrict(payload, &request); err != nil ||
+			request.Type != envelope.Type ||
+			!identityPattern.MatchString(request.ShareID) {
+			return nil, protocolViolation("native stop-share request is invalid")
+		}
+		err := session.stopShare(request.ShareID)
+		if err != nil {
+			return nil, err
+		}
+		return response(envelope, "share-stopped"), nil
+	case "pause-share":
+		var request pauseShareRequest
+		if err := decodeStrict(payload, &request); err != nil ||
+			request.Type != envelope.Type ||
+			!validIdentities(request.ShareID) {
+			return nil, protocolViolation("native pause-share request is invalid")
+		}
+		host := session.current(request.ShareID)
+		if host == nil {
+			return nil, errors.New("native share does not exist")
+		}
+		host.SetPaused(request.Paused)
+		slog.Debug("piik-client", "event", "native-share-paused", "requestId", envelope.ID,
+			"share", diagnostics.ID(request.ShareID), "paused", request.Paused)
+		return response(envelope, "share-paused"), nil
+	default:
+		return nil, protocolViolation("native control message is unsupported")
+	}
+}
+
+func (session *Session) Close() error {
+	session.mu.Lock()
+	if session.closed {
+		session.mu.Unlock()
+		return nil
+	}
+	session.closed = true
+	if session.startCancel != nil {
+		session.startCancel()
+	}
+	updateDone := session.updateDone
+	host := session.host
+	viewer := session.viewer
+	session.host = nil
+	session.viewer = nil
+	session.mu.Unlock()
+	session.cancel()
+	if host != nil {
+		_ = host.Close()
+	}
+	if viewer != nil {
+		_ = viewer.Close()
+	}
+	if updateDone != nil {
+		<-updateDone
+	}
+	return nil
+}
+
+func (session *Session) updateHost(host *nativehost.Session, request requestEnvelope, shareID string, profile nativehost.QualityProfile, complete func(any, error)) any {
+	return session.runHostOperation(host, request, func() (any, error) {
+		err := host.UpdateProfile(profile)
+		return session.shareUpdateResult(request, shareID, profile, host, err), err
+	}, complete)
+}
+
+// Capture mutations share one bounded operation slot. Stop remains
+// synchronous and cancels the owning share before joining this completion.
+func (session *Session) runHostOperation(host *nativehost.Session, request requestEnvelope, operation func() (any, error), complete func(any, error)) any {
+	session.mu.Lock()
+	if session.closed || session.host != host || session.updateDone != nil || session.startCancel != nil {
+		session.mu.Unlock()
+		return operationFailure(request, errors.New("native share operation is unavailable or already active"))
+	}
+	done := make(chan struct{})
+	session.updateDone = done
+	session.mu.Unlock()
+	go func() {
+		result, err := operation()
+		session.mu.Lock()
+		current := !session.closed && session.host == host
+		if !current && err == nil {
+			err = errors.New("native share stopped during operation")
+		}
+		if err != nil {
+			result = operationFailure(request, err)
+		}
+		complete(result, err)
+		session.finishHostOperation(done, result)
+	}()
+	return nil
+}
+
+// Startup has no Host yet to cancel. Reserve that same mutation slot, and
+// transfer its context to watchHost only after the new Host has been installed.
+func (session *Session) beginShare(ctx context.Context, envelope requestEnvelope, request startShareRequest, complete func(any, error)) any {
+	session.mu.Lock()
+	if session.closed || session.host != nil || session.viewer != nil || session.updateDone != nil || session.startCancel != nil {
+		session.mu.Unlock()
+		return operationFailure(envelope, errors.New("native share is unavailable or already active"))
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	session.updateDone, session.startID, session.startCancel = done, request.ShareID, cancel
+	session.mu.Unlock()
+	go func() {
+		result, err := session.startShare(ctx, envelope, request, cancel)
+		if err != nil {
+			cancel()
+			result = operationFailure(envelope, err)
+		}
+		complete(result, err)
+		session.mu.Lock()
+		session.startID, session.startCancel = "", nil
+		session.finishHostOperation(done, result)
+	}()
+	return nil
+}
+
+// Caller holds mu. Release admission before an ACK can trigger the next
+// mutation; a backed-up event writer must never hold the stop mutex.
+func (session *Session) finishHostOperation(done chan struct{}, result any) {
+	close(done)
+	if session.closed {
+		session.updateDone = nil
+		session.mu.Unlock()
+		return
+	}
+	select {
+	case session.events <- result:
+		session.updateDone = nil
+		session.mu.Unlock()
+		return
+	default:
+		session.mu.Unlock()
+	}
+	session.emit(result)
+	session.mu.Lock()
+	if session.updateDone == done {
+		session.updateDone = nil
+	}
+	session.mu.Unlock()
+}
+
+func (session *Session) validateAudioExclusion(source nativecapture.CaptureTarget, audio bool, excluded *nativecapture.CaptureTarget) error {
+	if excluded == nil {
+		return nil
+	}
+	if !audio || source.Kind != "display" || excluded.Kind != "window" || !excluded.Valid() {
+		return protocolViolation("native audio exclusion target is invalid")
+	}
+	if !session.capabilities.Summary().ProcessAudioExclusion || !session.capabilities.SystemAudio {
+		return errors.New("native audio exclusion is unavailable")
+	}
+	return nil
+}
+
+func (session *Session) shareUpdateResult(request requestEnvelope, shareID string, profile nativehost.QualityProfile, host *nativehost.Session, err error) any {
+	if err != nil {
+		return operationFailure(request, err)
+	}
+	slog.Debug("piik-client", "event", "native-profile-applied", "requestId", request.ID,
+		"share", diagnostics.ID(shareID), "profile", profile)
+	updated := shareUpdatedResponse{responseEnvelope: response(request, "share-updated"), ShareID: shareID}
+	if host != nil {
+		updated.Video = hostVideoFormat(host)
+	}
+	return updated
+}
+
+func (session *Session) startShare(
+	ctx context.Context,
+	envelope requestEnvelope,
+	request startShareRequest,
+	cancel context.CancelFunc,
+) (any, error) {
+	profile := session.qualityProfile(request.Profile)
+	if request.Codec == "vp8" && !session.capabilities.SoftwareVP8 {
+		return nil, errors.New("native VP8 encoding is unavailable")
+	}
+	if request.Codec == "av1" && !session.capabilities.HardwareAV1 {
+		return nil, errors.New("native AV1 encoding is unavailable")
+	}
+	if request.Codec == "h265" && !session.capabilities.HardwareHEVC {
+		return nil, errors.New("native H.265 encoding is unavailable")
+	}
+	session.mu.Lock()
+	if session.closed || ctx.Err() != nil || session.host != nil || session.viewer != nil {
+		session.mu.Unlock()
+		return nil, errors.New("native share is already active")
+	}
+	session.mu.Unlock()
+	host, err := nativehost.Start(ctx, nativehost.Options{
+		ShareID:        request.ShareID,
+		CaptureProcess: session.captureProcess,
+		Video: nativecapture.VideoOptions{
+			Target:            request.Source,
+			ShowCaptureBorder: request.ShowCaptureBorder && session.capabilities.CaptureBorderControl,
+			Codec:             request.Codec,
+			AdapterIndex:      request.AdapterIndex,
+			EncoderIndex:      request.EncoderIndex,
+			Profile:           profile.Video,
+		},
+		MicrophoneMixing: request.MicrophoneMixing && session.capabilities.Microphone,
+		ExcludeAudio:     request.ExcludeAudio,
+		Profile:          profile,
+		EdgeCapacity:     request.EdgeCapacity,
+		AudioEnabled: request.Audio && session.capabilities.Summary().AudioFor(
+			request.Source.Kind,
+		),
+		PortMapping: session.portMapping,
+		Events: func(ctx context.Context, event nativehost.Event) {
+			var value any = eventMessage(event)
+			if event.Current != nil {
+				value = loopback.ControlEvent{Value: value, Current: event.Current}
+			}
+			select {
+			case session.events <- value:
+			case <-ctx.Done():
+			case <-session.ctx.Done():
+			}
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	session.mu.Lock()
+	if session.closed || ctx.Err() != nil || session.host != nil || session.viewer != nil {
+		session.mu.Unlock()
+		_ = host.Close()
+		return nil, errors.New("native share is unavailable")
+	}
+	session.host = host
+	session.mu.Unlock()
+	codec := host.Codec()
+	slog.Debug("piik-client", "event", "native-profile-applied", "requestId", envelope.ID,
+		"share", diagnostics.ID(request.ShareID), "profile", profile, "codec", codec, "audio", host.HasAudio())
+	go func() { defer cancel(); session.watchHost(host) }()
+	return shareStartedResponse{
+		responseEnvelope: response(envelope, "share-started"),
+		ShareID:          request.ShareID,
+		Audio:            host.HasAudio(),
+		SourceAudio:      host.SourceAudio(),
+		Codec:            codec,
+		Video:            hostVideoFormat(host),
+	}, nil
+}
+
+func validQualitySettings(settings qualitySettings) bool {
+	return nativeQualityProfile(settings).Valid()
+}
+
+// qualityProfile asks the helper for a bitrate mode only when it can take one.
+func (session *Session) qualityProfile(settings qualitySettings) nativehost.QualityProfile {
+	profile := nativeQualityProfile(settings)
+	if !session.capabilities.Summary().BitrateModeControl {
+		profile.Video.BitrateMode = ""
+	}
+	return profile
+}
+
+func nativeQualityProfile(settings qualitySettings) nativehost.QualityProfile {
+	bitrateMode := settings.BitrateMode
+	if bitrateMode == "" {
+		bitrateMode = "vbr"
+	}
+	width, height := uint32(1), uint32(1)
+	switch settings.Resolution {
+	case "source":
+		width, height = 0, 0
+	case "480p":
+		width, height = 854, 480
+	case "720p":
+		width, height = 1280, 720
+	case "1080p":
+		width, height = 1920, 1080
+	case "1440p":
+		width, height = 2560, 1440
+	}
+	audioBitrate := 0
+	switch settings.ScreenAudioQuality {
+	case "", "music":
+		audioBitrate = 128_000
+	case "saver":
+		audioBitrate = 64_000
+	case "very-high":
+		audioBitrate = 192_000
+	case "high":
+		audioBitrate = 320_000
+	case "max":
+		audioBitrate = 510_000
+	}
+	return nativehost.QualityProfile{
+		Video: nativecapture.VideoProfile{
+			Width:       width,
+			Height:      height,
+			Framerate:   settings.MaxFramerate,
+			Bitrate:     settings.MaxBitrate,
+			Preference:  settings.DegradationPreference,
+			BitrateMode: bitrateMode,
+		},
+		AudioBitrate: audioBitrate,
+	}
+}
+
+func (session *Session) prepareEdge(
+	envelope requestEnvelope,
+	request prepareEdgeRequest,
+) (any, error) {
+	servers, err := pionICEServers(request.ICEServers)
+	if err != nil {
+		return nil, err
+	}
+	var offer webrtc.SessionDescription
+	if host := session.current(request.ShareID); host != nil && request.SourceConnectionID == "" {
+		offer, err = host.PrepareEdge(request.ConnectionID, servers)
+	} else if viewer := session.currentViewer(request.ShareID); viewer != nil &&
+		identityPattern.MatchString(request.SourceConnectionID) {
+		offer, err = viewer.PrepareEdge(
+			request.SourceConnectionID,
+			request.ConnectionID,
+			servers,
+		)
+	} else {
+		return nil, errors.New("native media source does not exist")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return edgeOfferResponse{
+		responseEnvelope: response(envelope, "edge-offer"),
+		ShareID:          request.ShareID,
+		ConnectionID:     request.ConnectionID,
+		SDP:              offer.SDP,
+	}, nil
+}
+
+func (session *Session) prepareLocalEdge(
+	envelope requestEnvelope,
+	request prepareLocalEdgeRequest,
+) (any, error) {
+	var offer webrtc.SessionDescription
+	var err error
+	if host := session.current(request.ShareID); host != nil && request.SourceConnectionID == "" {
+		offer, err = host.PrepareLocalEdge(request.ConnectionID)
+	} else if viewer := session.currentViewer(request.ShareID); viewer != nil &&
+		identityPattern.MatchString(request.SourceConnectionID) {
+		offer, err = viewer.PrepareLocalEdge(
+			request.SourceConnectionID,
+			request.ConnectionID,
+		)
+	} else {
+		return nil, errors.New("native media source does not exist")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return edgeOfferResponse{
+		responseEnvelope: response(envelope, "edge-offer"),
+		ShareID:          request.ShareID,
+		ConnectionID:     request.ConnectionID,
+		SDP:              offer.SDP,
+	}, nil
+}
+
+func (session *Session) receiveOffer(
+	envelope requestEnvelope,
+	request receiveOfferRequest,
+) (any, error) {
+	servers, err := pionICEServers(request.ICEServers)
+	if err != nil {
+		return nil, err
+	}
+	viewer, err := session.ensureViewer(request.ShareID, request.EdgeCapacity)
+	if err != nil {
+		return nil, err
+	}
+	result, err := viewer.AcceptOffer(
+		request.ConnectionID,
+		webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: request.SDP},
+		servers,
+		request.ReuseReceiver,
+	)
+	if err != nil {
+		return nil, err
+	}
+	response := receiveAnswerResponse{
+		responseEnvelope: response(envelope, "receive-answer"),
+		ShareID:          request.ShareID,
+		ConnectionID:     request.ConnectionID,
+		SDP:              result.Answer.SDP,
+		Audio:            result.Audio,
+		Codec:            result.Codec,
+	}
+	if request.ReuseReceiver {
+		response.Reused = &result.Reused
+	}
+	return response, nil
+}
+
+func (session *Session) stopShare(shareID string) error {
+	session.mu.Lock()
+	if session.startID == shareID && session.startCancel != nil {
+		session.startCancel()
+		done := session.updateDone
+		session.mu.Unlock()
+		<-done
+		return session.stopShare(shareID)
+	}
+	host := session.host
+	if host == nil || host.ShareID() != shareID {
+		session.mu.Unlock()
+		return nil
+	}
+	session.host = nil
+	updateDone := session.updateDone
+	session.mu.Unlock()
+	err := host.Close()
+	if updateDone != nil {
+		<-updateDone
+	}
+	return err
+}
+
+func (session *Session) current(shareID string) *nativehost.Session {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.closed || session.host == nil || session.host.ShareID() != shareID {
+		return nil
+	}
+	return session.host
+}
+
+func (session *Session) ensureViewer(
+	shareID string,
+	edgeCapacity int,
+) (*nativeviewer.Session, error) {
+	session.mu.Lock()
+	if session.closed || session.host != nil || session.startCancel != nil {
+		session.mu.Unlock()
+		return nil, errors.New("native media role is unavailable")
+	}
+	if session.viewer != nil {
+		viewer := session.viewer
+		session.mu.Unlock()
+		if viewer.ShareID() != shareID {
+			return nil, errors.New("native Viewer session identity changed")
+		}
+		return viewer, nil
+	}
+	session.mu.Unlock()
+	viewer, err := nativeviewer.Start(session.ctx, nativeviewer.Options{
+		ShareID: shareID, EdgeCapacity: edgeCapacity,
+		PortMapping: session.portMapping, Events: session.viewerEvents,
+		Relay: &mediaedge.RelayOptions{CaptureProcess: session.captureProcess, Capabilities: session.capabilities},
+	})
+	if err != nil {
+		return nil, err
+	}
+	session.mu.Lock()
+	if session.closed || session.host != nil || session.viewer != nil || session.startCancel != nil {
+		session.mu.Unlock()
+		_ = viewer.Close()
+		return nil, errors.New("native media role is unavailable")
+	}
+	session.viewer = viewer
+	session.mu.Unlock()
+	return viewer, nil
+}
+
+func (session *Session) currentViewer(shareID string) *nativeviewer.Session {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.closed || session.viewer == nil || session.viewer.ShareID() != shareID {
+		return nil
+	}
+	return session.viewer
+}
+
+func (session *Session) currentMedia(shareID string) outboundMediaSession {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.closed {
+		return nil
+	}
+	if session.host != nil && session.host.ShareID() == shareID {
+		return session.host
+	}
+	if session.viewer != nil && session.viewer.ShareID() == shareID {
+		return session.viewer
+	}
+	return nil
+}
+
+func (session *Session) stopViewer(shareID string) {
+	session.mu.Lock()
+	viewer := session.viewer
+	if viewer == nil || viewer.ShareID() != shareID {
+		session.mu.Unlock()
+		return
+	}
+	session.viewer = nil
+	session.mu.Unlock()
+	_ = viewer.Close()
+}
+
+func (session *Session) watchHost(host *nativehost.Session) {
+	err, open := <-host.Done()
+	session.mu.Lock()
+	if session.host == host {
+		session.host = nil
+	}
+	session.mu.Unlock()
+	if open {
+		session.emit(shareEndedEvent{
+			Version: loopback.ProtocolVersion,
+			Type:    "share-ended",
+			ShareID: host.ShareID(),
+			Failed:  err != nil,
+		})
+	}
+}
+
+func (session *Session) relayEvents() {
+	for {
+		select {
+		case event := <-session.viewerEvents:
+			session.emit(loopback.ControlEvent{Value: viewerEventMessage(event), Current: event.Current})
+		case <-session.ctx.Done():
+			return
+		}
+	}
+}
+
+func viewerEventMessage(event nativeviewer.Event) any {
+	base := eventEnvelope{
+		Version:      loopback.ProtocolVersion,
+		Type:         event.Type,
+		ShareID:      event.ShareID,
+		ConnectionID: event.ConnectionID,
+	}
+	switch event.Type {
+	case "edge-candidate":
+		return edgeCandidateEvent{eventEnvelope: base, Candidate: event.Candidate}
+	case "edge-state":
+		return edgeStateEvent{eventEnvelope: base, State: event.State}
+	case "edge-path":
+		return edgePathEvent{
+			eventEnvelope:    base,
+			LocalType:        event.LocalType,
+			RemoteType:       event.RemoteType,
+			NatTraversalPath: event.NatTraversalPath,
+		}
+	case "edge-quality":
+		quality := event.Quality
+		return edgeQualityEvent{
+			eventEnvelope:         base,
+			SampleTimestampMs:     quality.SampleTimestampMs,
+			SampleWindowMs:        quality.SampleWindowMs,
+			RTPStatsID:            quality.RTPStatsID,
+			TrackIdentifier:       quality.TrackIdentifier,
+			State:                 quality.State,
+			Reason:                quality.Reason,
+			IntervalFramesEncoded: quality.IntervalFramesEncoded,
+			FramesPerSecond:       quality.FramesPerSecond,
+			BitrateKbps:           quality.BitrateKbps,
+			AvailableOutgoingKbps: quality.AvailableOutgoingKbps,
+			Width:                 quality.Width,
+			Height:                quality.Height,
+		}
+	default:
+		return edgeStateEvent{eventEnvelope: base, State: event.State}
+	}
+}
+
+func (session *Session) emit(event any) {
+	select {
+	case session.events <- event:
+	case <-session.ctx.Done():
+	}
+}
+
+func eventMessage(event nativehost.Event) any {
+	base := eventEnvelope{
+		Version:               loopback.ProtocolVersion,
+		Type:                  event.Type,
+		ShareID:               event.ShareID,
+		ConnectionID:          event.ConnectionID,
+		PublicationGeneration: event.PublicationGeneration,
+	}
+	switch event.Type {
+	case "audio-state":
+		return audioStateEvent{eventEnvelope: base, SourceAudio: event.SourceAudio, Microphone: event.Microphone, Failed: event.Failed}
+	case "publication-quality":
+		return publicationQualityEvent{eventEnvelope: base, PublicationQualitySample: *event.PublicationQuality}
+	case "edge-candidate", "publication-candidate":
+		return edgeCandidateEvent{eventEnvelope: base, Candidate: event.Candidate}
+	case "edge-state", "publication-state":
+		return edgeStateEvent{eventEnvelope: base, State: event.State}
+	case "edge-path":
+		return edgePathEvent{
+			eventEnvelope:    base,
+			LocalType:        event.LocalType,
+			RemoteType:       event.RemoteType,
+			NatTraversalPath: event.NatTraversalPath,
+		}
+	case "edge-quality":
+		quality := event.Quality
+		return edgeQualityEvent{
+			eventEnvelope:         base,
+			SampleTimestampMs:     quality.SampleTimestampMs,
+			SampleWindowMs:        quality.SampleWindowMs,
+			RTPStatsID:            quality.RTPStatsID,
+			TrackIdentifier:       quality.TrackIdentifier,
+			State:                 quality.State,
+			Reason:                quality.Reason,
+			IntervalFramesEncoded: quality.IntervalFramesEncoded,
+			FramesPerSecond:       quality.FramesPerSecond,
+			BitrateKbps:           quality.BitrateKbps,
+			AvailableOutgoingKbps: quality.AvailableOutgoingKbps,
+			Width:                 quality.Width,
+			Height:                quality.Height,
+		}
+	default:
+		return captureStateEvent{eventEnvelope: base, State: event.State}
+	}
+}
+
+func pionICEServers(values []iceServer) ([]webrtc.ICEServer, error) {
+	if len(values) > maxICEServers {
+		return nil, protocolViolation("native ICE server list is too large")
+	}
+	result := make([]webrtc.ICEServer, 0, len(values))
+	for _, server := range values {
+		if len(server.URLs) == 0 || len(server.URLs) > maxURLsPerServer {
+			return nil, protocolViolation("native ICE server is invalid")
+		}
+		urls := make([]string, 0, len(server.URLs))
+		for _, value := range server.URLs {
+			if !validSTUNURL(value) {
+				return nil, protocolViolation("native STUN URL is invalid")
+			}
+			urls = append(urls, value)
+		}
+		result = append(result, webrtc.ICEServer{URLs: urls})
+	}
+	return result, nil
+}
+
+func validSTUNURL(value string) bool {
+	if len(value) < 6 || len(value) > maxSTUNURLBytes ||
+		!strings.EqualFold(value[:5], "stun:") {
+		return false
+	}
+	authority := value[5:]
+	if authority == "" || strings.ContainsAny(authority, "/?#@") ||
+		strings.IndexFunc(authority, unicode.IsSpace) >= 0 ||
+		strings.HasSuffix(authority, ":") {
+		return false
+	}
+	parsed, err := url.Parse("http://" + authority)
+	if err != nil || parsed.Hostname() == "" || parsed.User != nil ||
+		(parsed.Path != "" && parsed.Path != "/") ||
+		parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	port := parsed.Port()
+	if port == "" {
+		return true
+	}
+	number, err := strconv.Atoi(port)
+	return err == nil && number > 0 && number <= 65_535
+}
+
+// Relayed media text keeps the Browser/server's UTF-16 limits. Its rejection
+// fails one request, not the authenticated Browser's entire native session.
+func validSDP(sdp string) bool {
+	return sdp != "" && protocol.UTF16Length(sdp) <= maxSDPUnits
+}
+
+func validCandidate(candidate *webrtc.ICECandidateInit) bool {
+	if candidate == nil {
+		return true
+	}
+	return protocol.UTF16Length(candidate.Candidate) <= maxCandidateUnits &&
+		(candidate.SDPMid == nil || protocol.UTF16Length(*candidate.SDPMid) <= 128) &&
+		(candidate.SDPMLineIndex == nil || *candidate.SDPMLineIndex <= 255) &&
+		(candidate.UsernameFragment == nil || protocol.UTF16Length(*candidate.UsernameFragment) <= 256)
+}
+
+func validIdentities(values ...string) bool {
+	for _, value := range values {
+		if !identityPattern.MatchString(value) {
+			return false
+		}
+	}
+	return true
+}
+
+func captureTargetKey(target nativecapture.CaptureTarget) string {
+	if target.Kind == "window" {
+		return "window:" + target.SourceID + ":" +
+			strconv.FormatUint(uint64(target.PID), 10) + ":" + target.CreationTime
+	}
+	return "display:" + target.SourceID
+}
+
+func decodeEnvelope(payload []byte, envelope *requestEnvelope) error {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	if err := decoder.Decode(envelope); err != nil || decoder.Decode(&struct{}{}) != io.EOF ||
+		envelope.Version != loopback.ProtocolVersion ||
+		!identityPattern.MatchString(envelope.ID) || envelope.Type == "" {
+		return protocolViolation("native control envelope is invalid")
+	}
+	return nil
+}
+
+func decodeStrict(payload []byte, value any) error {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		return protocolViolation("native control message is invalid")
+	}
+	return nil
+}
+
+func response(request requestEnvelope, responseType string) responseEnvelope {
+	return responseEnvelope{
+		Version: loopback.ProtocolVersion,
+		ID:      request.ID,
+		Type:    responseType,
+	}
+}
+
+func operationFailure(request requestEnvelope, causes ...error) requestFailedResponse {
+	if len(causes) > 0 {
+		slog.Debug("piik-client", "event", "native-operation-failed", "requestId", request.ID,
+			"requestType", diagnostics.SafeText(request.Type), diagnostics.Error(causes[0]))
+	}
+	return requestFailedResponse{
+		responseEnvelope: response(request, "request-failed"),
+		Code:             "operation-failed",
+	}
+}
+
+func (session *Session) traceRequest(request requestEnvelope, payload []byte) func(any, error) {
+	if !slog.Default().Enabled(session.ctx, slog.LevelDebug) {
+		return func(any, error) {}
+	}
+	// Read only identities: source titles, SDP, candidates and media never enter the log.
+	var identity struct {
+		ShareID               string `json:"shareId"`
+		ConnectionID          string `json:"connectionId"`
+		SourceConnectionID    string `json:"sourceConnectionId"`
+		PublicationGeneration string `json:"publicationGeneration"`
+	}
+	_ = json.Unmarshal(payload, &identity)
+	logger := slog.Default().With("requestId", request.ID, "requestType", diagnostics.SafeText(request.Type),
+		"share", diagnostics.ID(identity.ShareID), "connection", diagnostics.ID(identity.ConnectionID),
+		"sourceConnection", diagnostics.ID(identity.SourceConnectionID), "publication", diagnostics.ID(identity.PublicationGeneration))
+	started := time.Now()
+	logger.Debug("piik-client", "event", "native-request-started")
+	return func(result any, err error) {
+		failure, rejected := result.(requestFailedResponse)
+		logger.Debug("piik-client", "event", "native-request-ended", "durationMs", time.Since(started).Milliseconds(),
+			"failed", err != nil || rejected, "code", failure.Code, diagnostics.Error(err))
+	}
+}

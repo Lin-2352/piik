@@ -1,0 +1,37 @@
+# Local secrets and machine-specific overrides
+.env
+.env.*
+!.env.example
+*.local
+*.key
+*.p12
+*.pem
+*.pfx
+.claude/settings.local.json
+
+# Dependencies and generated output
+node_modules/
+public/third-party-licenses.txt
+build/
+coverage/
+/dist/
+!internal/server/webassets/dist/
+internal/server/webassets/dist/*
+!internal/server/webassets/dist/.gitkeep
+benchmark-results/
+.cache/
+*.sqlite
+*.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal
+
+# Editor and operating-system noise
+.DS_Store
+Thumbs.db
+*.swp
+
+# Local run output and bundled binaries (rebuilt locally; may contain addresses)
+/logs/
+/err.txt
+/out.txt
+/runtime/

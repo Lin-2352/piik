@@ -1,0 +1,67 @@
+name: Website
+
+on:
+  # Publish the website after main's checks complete.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.conclusion == 'success'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            site/docs/package-lock.json
+      - run: npm ci
+      - run: npm ci --prefix site/docs
+      - run: npm run build:website
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: build/site
+          retention-days: 1
+      - name: Keep older runs from replacing the current website
+        id: current
+        shell: bash
+        run: |
+          git fetch --no-tags origin main
+          if [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Skipped an outdated website build. Run Website again for current main." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/deploy-pages@v4
+        if: steps.current.outputs.deploy == 'true'
+        id: deployment

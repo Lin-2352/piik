@@ -1,0 +1,238 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { BrowserEncodingProducer } from "../src/client/media/browser-encoding-producer";
+import { configureVideoSender, QUALITY_PROFILES } from "../src/client/media/quality";
+
+vi.mock("../src/client/media/quality", async (original) => ({
+  ...await original<typeof import("../src/client/media/quality")>(),
+  applyVideoCaptureProfile: vi.fn(async () => undefined),
+  configureVideoSender: vi.fn(async () => undefined),
+}));
+
+class Track extends EventTarget {
+  readonly id = "capture";
+  enabled = true;
+  readyState = "live";
+  contentHint = "motion";
+  readonly stop = vi.fn(() => { this.readyState = "ended"; });
+  clone() { return new Track(); }
+}
+
+class Connection {
+  static instances: Connection[] = [];
+  connectionState = "connecting";
+  onconnectionstatechange: (() => void) | null = null;
+  onicecandidate: ((event: { candidate: RTCIceCandidate }) => void) | null = null;
+  readonly addIceCandidate = vi.fn(async (_candidate: RTCIceCandidateInit) => undefined);
+  localDescription: RTCSessionDescriptionInit | null = null;
+  remoteDescription: RTCSessionDescriptionInit | null = null;
+  readonly close = vi.fn(() => { this.connectionState = "closed"; });
+  private frames!: ReadableStreamDefaultController<RTCEncodedVideoFrame>;
+  readonly getStats = vi.fn(async () => new Map<string, object>([
+    ["video", { type: "outbound-rtp", kind: "video", mediaSourceId: "source", framesEncoded: 100 }],
+    ["source", { type: "media-source", trackIdentifier: "capture" }],
+  ]) as unknown as RTCStatsReport);
+  readonly sender = {
+    getParameters: () => ({ encodings: [{}] }),
+    setParameters: vi.fn(async () => undefined),
+    createEncodedStreams: () => ({
+      readable: new ReadableStream<RTCEncodedVideoFrame>({ start: controller => { this.frames = controller; } }),
+      writable: new WritableStream<RTCEncodedVideoFrame>(),
+    }),
+  };
+  constructor() { Connection.instances.push(this); }
+  addTransceiver() { return { sender: this.sender, setCodecPreferences() {} }; }
+  async createOffer() { return { type: "offer" as const, sdp: "offer" }; }
+  async createAnswer() { return { type: "answer" as const, sdp: "answer" }; }
+  async setLocalDescription(value: RTCSessionDescriptionInit) { this.localDescription = value; }
+  async setRemoteDescription(value: RTCSessionDescriptionInit) { this.remoteDescription = value; }
+  state(value: string) { this.connectionState = value; this.onconnectionstatechange?.(); }
+  async frame(bytes = 1) {
+    this.frames.enqueue({ data: new ArrayBuffer(bytes) } as RTCEncodedVideoFrame);
+    await vi.advanceTimersByTimeAsync(0);
+  }
+}
+
+const producers: BrowserEncodingProducer[] = [];
+function createProducer(codec: RTCRtpCodec = { mimeType: "video/VP8", clockRate: 90000 }) {
+  const source = new Track();
+  const failed = vi.fn();
+  const producer = new BrowserEncodingProducer(source as unknown as MediaStreamTrack,
+    QUALITY_PROFILES["1080p30"], codec, vi.fn(), failed);
+  producers.push(producer);
+  return { producer, source, failed };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.useFakeTimers();
+  Connection.instances = [];
+  vi.stubGlobal("RTCPeerConnection", Connection);
+  vi.stubGlobal("MediaStream", class {});
+  vi.stubGlobal("document", { createElement: () => ({ pause() {}, play: async () => undefined }) });
+});
+
+afterEach(async () => {
+  for (const producer of producers.splice(0)) producer.dispose();
+  await vi.runAllTimersAsync();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
+describe("Browser encoding producer startup", () => {
+  const localAnswer = (codec: string, fmtp = "") => ({ type: "answer" as const, sdp: [
+    "v=0", "o=- 1 1 IN IP4 127.0.0.1", "s=-", "t=0 0",
+    "m=video 9 UDP/TLS/RTP/SAVPF 96", "c=IN IP4 0.0.0.0", "a=recvonly",
+    `a=rtpmap:96 ${codec}/90000`, ...(fmtp ? [`a=fmtp:96 ${fmtp}`] : []), "",
+  ].join("\r\n") });
+
+  it.each([
+    ["VP8", ""],
+    ["H264", "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"],
+  ])("initializes only the local %s answer from its existing budget", async (name, fmtp) => {
+    const codec = Object.freeze({ mimeType: `video/${name}`, clockRate: 90000, sdpFmtpLine: fmtp });
+    vi.spyOn(Connection.prototype, "createAnswer").mockResolvedValue(localAnswer(name, fmtp));
+    const { producer } = createProducer(codec);
+    await producer.start(3_333_999);
+    const [send, receive] = Connection.instances;
+    const answer = receive.localDescription!;
+    expect(answer.sdp).toContain("x-google-start-bitrate=3333");
+    if (fmtp) expect(answer.sdp).toContain(fmtp);
+    expect(send.remoteDescription).toBe(answer);
+    expect(send.localDescription!.sdp).not.toContain("x-google-start-bitrate");
+    expect(codec.sdpFmtpLine).toBe(fmtp);
+
+    await producer.update(QUALITY_PROFILES["1080p30"], 400_000);
+    expect(vi.mocked(configureVideoSender).mock.lastCall![1].maxBitrate).toBe(400_000);
+    expect(receive.localDescription).toBe(answer);
+    expect(Connection.prototype.createAnswer).toHaveBeenCalledOnce();
+  });
+
+  it.each([0, 999, Number.NaN])("does not invent a starting rate for budget %s", async (budget) => {
+    const answer = localAnswer("VP8");
+    vi.spyOn(Connection.prototype, "createAnswer").mockResolvedValue(answer);
+    const { producer } = createProducer();
+    await producer.start(budget);
+    expect(Connection.instances[1].localDescription).toBe(answer);
+  });
+
+  it("bounds the start hint by the Host ceiling without duplicating an existing hint", async () => {
+    vi.spyOn(Connection.prototype, "createAnswer").mockResolvedValue(localAnswer("VP8", "x-google-start-bitrate=300"));
+    const { producer } = createProducer();
+    await producer.start(7_000_000);
+    const sdp = Connection.instances[1].localDescription!.sdp!;
+    expect(sdp).toContain("a=fmtp:96 x-google-start-bitrate=5000\r\n");
+    expect(sdp.match(/x-google-start-bitrate=/g)).toHaveLength(1);
+  });
+
+  it("protects first publication instead of spending the startup frames on local warmup", async () => {
+    const { producer } = createProducer();
+    await producer.start();
+    for (const connection of Connection.instances) connection.state("connected");
+    const send = Connection.instances[0];
+    const preference = () => vi.mocked(configureVideoSender).mock.lastCall![1].degradationPreference;
+    const report = async () => { await producer.report(); await vi.advanceTimersByTimeAsync(0); };
+
+    for (let i = 0; i < 10; i++) await send.frame();
+    await report();
+    expect(preference()).toBe("maintain-resolution");
+
+    producer.beginOutput();
+    producer.setPaused(true);
+    for (let i = 0; i < 5; i++) await send.frame();
+    producer.setPaused(false);
+    await send.frame(0);
+    for (let i = 0; i < 4; i++) await send.frame();
+    await report();
+    expect(preference()).toBe("maintain-resolution");
+
+    // Another child's attachment must not restart this producer's protection.
+    producer.beginOutput();
+    await send.frame();
+    await report();
+    expect(preference()).toBe("balanced");
+    producer.beginOutput();
+    await report();
+    expect(preference()).toBe("balanced");
+  });
+
+  it.each(["queued", "active"])("keeps the producer after a %s candidate rejection", async (phase) => {
+    const { producer, failed } = createProducer();
+    const starting = producer.start();
+    const [send, receive] = Connection.instances;
+    const candidate = { candidate: "candidate:1 1 udp 1 127.0.0.1 9000 typ host" } as RTCIceCandidate;
+    receive!.addIceCandidate.mockRejectedValueOnce(new DOMException("Rejected candidate", "OperationError"));
+    if (phase === "queued") send!.onicecandidate?.({ candidate });
+    await starting;
+    for (const connection of Connection.instances) connection.state("connected");
+    if (phase === "active") send!.onicecandidate?.({ candidate });
+    const valid = { candidate: "candidate:2 1 udp 1 127.0.0.1 9001 typ host" } as RTCIceCandidate;
+    send!.onicecandidate?.({ candidate: valid });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(receive!.addIceCandidate).toHaveBeenCalledWith(valid);
+    expect(failed).not.toHaveBeenCalled();
+    expect(Connection.instances.every(connection => connection.close.mock.calls.length === 0)).toBe(true);
+    expect(producer.track?.readyState).toBe("live");
+  });
+
+  it.each([false, true])("retires a stuck local transport once (one side connected: %s)", async (oneSide) => {
+    const { producer, source, failed } = createProducer();
+    await producer.start();
+    const input = producer.track as unknown as Track;
+    if (oneSide) Connection.instances[0]!.state("connected");
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(failed).toHaveBeenCalledOnce();
+    expect(Connection.instances.every((connection) => connection.close.mock.calls.length === 1)).toBe(true);
+    expect(input.stop).toHaveBeenCalledOnce();
+    expect(source.stop).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(failed).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a connected producer without requiring frames from a quiet or paused source", async () => {
+    const { producer, failed } = createProducer();
+    await producer.start();
+    producer.setPaused(true);
+    for (const connection of Connection.instances) connection.state("connected");
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(failed).not.toHaveBeenCalled();
+    expect(producer.track?.readyState).toBe("live");
+  });
+
+  it("cancels startup when retired and does not fail its replacement", async () => {
+    const old = createProducer();
+    await old.producer.start();
+    old.producer.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    const next = createProducer();
+    await next.producer.start();
+    for (const connection of Connection.instances.slice(2)) connection.state("connected");
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(old.failed).not.toHaveBeenCalled();
+    expect(next.failed).not.toHaveBeenCalled();
+    expect(next.producer.track?.readyState).toBe("live");
+  });
+
+  it("routes keyframe request failure through the producer owner, not the outgoing connection", async () => {
+    const { producer, source, failed } = createProducer();
+    await producer.start();
+    for (const connection of Connection.instances) connection.state("connected");
+    Connection.instances[0].sender.setParameters.mockRejectedValueOnce(new Error("Encoder failed"));
+
+    await expect(producer.requestKey()).resolves.toBeUndefined();
+    expect(failed).toHaveBeenCalledOnce();
+    expect(producer.track).toBeNull();
+    expect(source.stop).not.toHaveBeenCalled();
+  });
+
+  it("ignores a keyframe request during ordinary recovery after the producer has retired", async () => {
+    const { producer, failed } = createProducer();
+    await producer.start();
+    Connection.instances[0].state("failed");
+    expect(failed).toHaveBeenCalledOnce();
+
+    await expect(producer.requestKey()).resolves.toBeUndefined();
+    expect(failed).toHaveBeenCalledOnce();
+  });
+});

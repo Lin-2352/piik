@@ -1,0 +1,626 @@
+# Native App Media Evidence
+
+- Reviewed: 2026-10-06
+- Scope: platform capture, shared encoded sources, Pion transport and Browser
+  decode; current behavior belongs to [media quality](../standards/media-quality.md)
+- Status: Windows physical native Host and Viewer gates passed; macOS and Linux adapters
+  compile and package but still require physical media gates
+
+## Windows Audio Exclusion
+
+A Windows 11 build 26200 check used two independent WinMM processes emitting
+500 Hz and 1500 Hz tones, through the production capture helper and Go PCM
+reader. Default-device loopback captured both at approximately 1799 amplitude;
+process inclusion retained the first with under 0.3 amplitude of the other,
+and exclusion retained the second with under 0.04 of the excluded tone. Target
+exit retired capture in about 42 ms; attempting the stale identity failed.
+No raw audio was saved. The extended capability probe completed in 300 ms.
+
+A parent/child follow-up used a silent selected parent with a 1900 Hz child,
+plus an independent 2900 Hz process. Process-scoped reference amplitudes were
+about 1799; exclusion retained the independent tone at 1800 and reduced the
+selected child's tone to 9.3 (under 0.6%). Parent exit retired capture in 64 ms;
+its stale identity was rejected. The reference uses each signal's own process
+capture: default-device loopback also includes unrelated playback and endpoint
+processing, so its amplitude is not a process-capture gain reference.
+
+The session fixture separately verifies failed exclusion replacement mutes
+source audio while preserving video, microphone and encoded audio output; pause
+and audio-profile changes retain the selected input. These checks establish a
+local Windows implementation and one direct child, not coverage of every voice
+application's process tree or simultaneous playback across several output devices. Those remain
+device acceptance boundaries. [ADR-0008](../adr/0008-window-scoped-audio-capture.md)
+owns the platform choice.
+
+The capability check now attempts exclusion activation on Windows 10 2004+
+instead of rejecting all builds below 20348. Microsoft documents 20348 as the
+minimum, while OBS documents application loopback on Windows 10 2004+; the
+activation result, not an OS label, controls availability. Physical Windows 10
+exclusion remains unverified. A session regression check changes exclusion and
+source-audio off/on while video preparation is deliberately unavailable: the
+capture stream, encoded source, audio output and connected edge remain the same.
+
+The [Windows activation contract](https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ns-audioclientactivationparams-audioclient_process_loopback_params)
+accepts one PID and its process tree, not a list of unrelated processes.
+The [win-capture-audio implementation](https://github.com/bozbez/win-capture-audio/releases/tag/v2.2.0-beta)
+supports broader exclusion by tracking audio sessions, capturing non-matching
+processes and mixing them. Applying that design here would require session
+discovery, process-tree deduplication and bounded multi-input mixing; Piik's
+current source-plus-microphone mixer does not own that inventory. Multiple
+exclusions therefore require a capture design change, not just a multi-select
+control. Combining exclusion streams does not itself exclude their combined set.
+
+## Initial Physical Evidence (2026-09-05)
+
+These checks established the original native media paths. The Browser-mediated
+SFU and loopback v8 observations below are historical. [ADR-0013](../adr/0013-embedded-node-local-media.md)
+owns the SFU replacement; [versioning](../standards/versioning.md) owns the current
+wire contract.
+
+Piik App can own one process-isolated Windows capture and hardware H.264
+encoder, feed its Annex-B access units into one Pion source, and deliver that
+source through independent WebRTC transports to unmodified Chrome receivers.
+The Browser remains the room, route, and signaling authority.
+
+The same App can run the Local authority, open the normal Host page, and
+attach that native source to the current route. A remote Pion Viewer then
+received 30 packets over a selected `srflx`-to-`srflx` pair. The validation
+session carried signaling through a temporary reverse SSH path only; media was
+negotiated directly by ICE.
+
+On 2026-09-05, a separate Windows Local gate used a Browser Host with synthetic
+1280x720 motion and an App-activated Viewer. The Viewer exclusively claimed
+the v8 loopback control session and real Chrome decoded 621 frames at 1280x720.
+This proves the Browser-to-Native receive/local-bridge path rather than a silent
+Browser fallback. A Pion integration gate separately forwards the same H.264
+and Opus payload from one inbound receiver source to a bounded downstream edge,
+while dropping upstream connection-local extensions so each outbound Pion
+interceptor writes its own negotiated TWCC header.
+
+The one-link form carried the current signaling protocol through its temporary
+public WSS origin to an independent Linux Pion Viewer. Repeated runs delivered
+30+ packets over selected direct paths using a reflexive candidate; the Quick
+Tunnel carried no media.
+
+An isolated LiveKit 1.13.6 gate carried the same native source through one
+reserved local Pion edge into the existing Browser `SfuPublisher`; an ordinary
+LiveKit Viewer received the default 1080p source, then 15 consecutive 854x480
+frames after one live Native/SFU profile change. The direct native P2P path,
+Browser, App, LiveKit process, ports, and profiles all cleaned up.
+
+The opt-in `gate:app-media` run proved, in order:
+
+- WGC capture and adapter-bound Media Foundation H.264 became active;
+- 30+ encoded 1280x720 frames crossed the bounded process protocol;
+- a PLI caused a later recovery unit;
+- the packaged App exposed only separately probed video, process-audio,
+  system-audio, and hardware-H.264 capability booleans before control connected;
+- two Pion ICE/DTLS/SRTP edges each delivered 30+ decoded 1280x720 frames
+  to Chrome from that one encoded source;
+- the self-hosted STUN endpoint produced ordinary `host` and `srflx`
+  candidates;
+- process-loopback audio produced non-zero PCM, Opus RTP, and non-zero decoded
+  audio energy on both native edges; the same checks pass for a display using
+  system loopback;
+- closing the captured source ended its share, released the old media path, and
+  a second capture generation in the same room delivered a different media
+  object plus 30 new frames to the existing Viewer;
+- App, capture, Browser, ports, and the isolated profile all closed.
+
+Unit coverage separately enforces the supplied edge capacity, forwards PLI/FIR
+to the shared video source, validates the same PeerConnection's Opus section,
+and bounds the pure-Go Opus encoder's steady-state allocations. The native Host
+session starts the target-appropriate loopback audio only when the capture probe
+advertises it; an audio start failure leaves the video session alive. The
+cross-NAT result proves reachability and RTP delivery, not heterogeneous
+congestion behavior or a paired no-Site Browser media session.
+
+The audio adapter uses `github.com/thesyncim/gopus` behind the private
+`nativeaudio` boundary. It accepts fixed 48 kHz stereo PCM16/20 ms frames,
+encodes into a caller-owned Opus buffer, and can be replaced without changing
+the media edge or control wire. The dependency is BSD-3-Clause licensed and
+requires Go 1.25; App CI uses Go 1.26.6.
+
+## Current Boundary
+
+Windows supports hardware H264 and software VP8 behind the same capture,
+source and Pion transport boundary. The pinned WebRTC encoder pipeline supplies
+libvpx; VP8 reads NV12 through a reusable staging texture and converts to I420.
+Separate real Browser gates proved manual VP8 and Auto-selected H264, including
+live presets, pause/resume,
+source replacement and exact RTP codec preservation. Auto uses a bounded
+synthetic target-profile cadence check, not a score or a runtime codec switch.
+GPU-heavy selection and cross-device startup remain open acceptance work.
+
+A 2026-09-28 check on Ryzen 7 9700X / RTX 4070 SUPER / Windows 11 26200
+used the animated Browser gate source at a 1080p, 8 Mbps ceiling. With asynchronous
+MFT readiness and no `timeBeginPeriod(1)` request, Auto selected NVIDIA H264 at
+30 and 60 fps, reaching active in 1.851 and 1.855 s respectively. Full Browser
+gates passed Auto, manual H264 and VP8 with source/profile replacement and
+retirement. The helper-cost measurement below uses asynchronous CPU sampling:
+blocking the probe's encoded-output reader while querying process statistics
+distorts sustained cadence and must not be used for performance comparison.
+
+Native Auto now observes the live pipeline's output, including the frame dropper
+implicated by the [Browser AMD evidence](./realtime-quality-adaptation.md#h264-root-cause-and-gate).
+Cold-start work is excluded from steady cadence, while the selection deadline
+reaches MFT input/output waits. Synchronous driver activation/configuration and
+shutdown cannot be preempted by that deadline. Slow-output rejection has fixture
+coverage; native AMD/Intel physical acceptance and game-load behavior remain
+open. This evidence does not establish the cause of reported system-wide lag.
+
+The `input-texture-create / 0x887a0005` report identifies a lost D3D device during
+candidate preparation, not a failed room route or proof that every candidate
+failed. Following Microsoft's [device-loss guidance](https://learn.microsoft.com/en-us/windows/uwp/gaming/handling-device-lost-scenarios),
+capture preserves the original stage/HRESULT and queries `GetDeviceRemovedReason`
+before releasing that candidate's device. Each later candidate and Auto's VP8
+fallback owns a fresh device; a live encoder does not silently change codec.
+A 2026-10-03 local check exercised all five enumerated adapter entries, including
+15 successful NVIDIA activation/encode/shutdown cycles on reused devices.
+AMD activation returned `0x8007000e` with a healthy D3D device. A standalone
+`MFTEnum2 -> ActivateObject` probe reproduced that failure for both AMD entries
+without Piik, a D3D device or codec configuration, while NVIDIA entries activated.
+This isolates the local activation failure to the platform/MFT path; it does not
+identify the reporter's AMD failure. Production Auto and manual H264 both moved
+from that preferred AMD candidate to working NVIDIA
+H264 (about 1.95 s and 0.32 s). This did not
+reproduce the reporter's device removal. No driver reset was forced, and the
+optional D3D debug layer was unavailable. The reporter's removal reason,
+subsequent candidates and final outcome remain necessary to assign its cause.
+
+A deeper check on the same machine passed 600 synthetic NV12 allocations
+across those adapter entries and all five resolutions. Forty activation/retirement
+cycles included cancellation and shutdown with an input still in flight; the
+device remained healthy. Five selections, including AMD rejection, also
+succeeded while another process continued H264 encoding.
+The reported stage creates probe textures before actual WGC capture; Auto's
+cadence textures are prepared before MFT activation. These results narrow the
+tested mechanisms but do not cover the failing device, driver reset or exhaustion.
+
+Repeated NVIDIA MFT activation retained about two process handles per cycle.
+A standalone 40-cycle program reproduced this without Piik or a D3D device:
+`MFTEnum2 -> ActivateObject -> ShutdownObject -> Release`, with both COM reference
+counts reaching zero. Fresh activation objects, direct `MFShutdownObject`, and
+waiting five seconds after `MFShutdown` did not remove the incremental growth.
+This isolates a local platform/MFT resource behavior, not a proven cause of
+device loss. Retain capture-process ownership of driver resources; do not add
+unowned `Release` calls or infer a GPU-recovery policy from this observation.
+
+The same investigation found a separate MFT input-contract defect: a populated
+720p NV12 surface reported a maximum length of 1,382,400 bytes but current/sample
+length zero. The shared surface wrapper now sets the valid length from the
+platform's capacity; the hardware fixture uses that same wrapper. This follows
+Microsoft's [media-buffer contract](https://learn.microsoft.com/en-us/windows/win32/medfound/working-with-media-buffers)
+and [Chromium's MFT input handling](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/media/gpu/windows/media_foundation_video_encode_accelerator_win.cc),
+which explicitly accommodates encoders that honor this length. The regression
+failed before the fix and passes with a WARP surface, without an installed
+hardware encoder. This removes reliance on vendor tolerance; the reported
+texture-creation error precedes this wrapper, so it is not that error's cause.
+
+Native Host media is exposed only through an explicit App-launched Host
+selection; an ordinary Web Host retains Browser capture.
+
+Native Host publication now sends its encoded source directly to the embedded
+SFU. The local Browser bridge supplies preview and Browser quality candidates;
+it does not supply the ordinary Native SFU publication. Received tracks still
+cannot own capture constraints. [Media quality](../standards/media-quality.md#framework-owned-adaptation)
+owns the current output and adaptation contract.
+
+A shared encode cannot independently adapt one bitstream for unequal paths.
+Rather than lower every Native child, a quality operation originating from a
+    persistently degraded Native sender edge may prepare one Browser WebRTC sender
+from the stable local bridge. The existing overlapping candidate comparison
+alone commits or rolls it back, and a later quality operation can return that
+edge to Native. Healthy Native edges keep sharing the hardware encode. This is
+implemented without a new route reason, timer, score, or representation ladder;
+controlled weak-path physical acceptance remains open.
+
+Native edges now use the shared Pion/LiveKit forwarding adapter for transport
+feedback, allocation, pacing and recovery. The former no-op-pacer and
+source-payload-versus-GCC comparison are no longer the product implementation.
+[Observable truth](../standards/media-quality.md#observable-truth) owns current
+quality evidence, including committed allocation deficiency and unknown feedback.
+
+No-Site Internet control can use the one-link mode owned by ADR-0010. Its remote
+Pion gate proves public signaling plus direct media, but not decoded Browser
+media on a physical second device. Cloudflare carries HTTPS/WebSocket control
+and provides public STUN, while DTLS-SRTP media remains direct. STUN alone
+cannot replace SFU/TURN on a restricted pair.
+
+Native physical connections own independent Pion UDP sockets. Site and one-link
+P2P connections make a bounded, best-effort PCP, UPnP, or NAT-PMP mapping through
+NetBird's standalone Go NAT package; pure LAN Local mode does not. A physical
+router created and removed an ephemeral UPnP mapping; the Apache-2.0 dependency
+added about 0.38 MiB to the stripped Windows App. Mapping and the supplemental
+STUN survey now run alongside ordinary candidate gathering; neither delays the
+offer or ordinary candidates. End-of-candidates waits for both owners. Mapping
+refresh and retirement follow the connection; [NAT evidence](./nat-traversal.md)
+records the current dependency and reachability limits.
+The returned port is advertised once per observed public address as a
+lower-priority candidate. Only the three explicit same-socket survey candidates
+feed NAT prediction; the mapped candidate does not. This proves lifecycle and
+signaling, not that the mapped candidate has yet rescued a pair that public STUN
+alone could not connect.
+
+The retained hardware fixture also changed one live NVIDIA MFT through
+`3 Mbps -> 1.5 Mbps -> 3 Mbps` without recreating it. Equal 120-frame phases
+produced about `1.00 MB -> 0.68 MB -> 0.97 MB`, while ordered 30 fps output and
+the pinned profile remained intact. Both AMD MFT candidates failed activation
+before this probe, so the evidence is not a cross-vendor dynamic-rate contract.
+With the failing AMD candidate preferred, bounded product selection now reaches
+the working NVIDIA H264 encoder without changing codec. A local native Host gate
+also passes decoded Viewer output, quality changes and source replacement. This
+establishes the selection defect and repair, not the unknown reporter's cause.
+This earlier fixture proves dynamic hardware rate changes, not the current
+multi-output allocation policy or cross-vendor performance.
+
+The Windows source boundary now enumerates displays and windows and returns a
+bounded best-effort preview. A display uses WGC plus default render-device
+loopback audio; a window uses WGC plus process-tree loopback when that actual
+capability probe succeeds. Preview failure is advisory and cannot tear down
+the control session.
+
+A controlled 144 fps window on Windows build 26200 exposed two capture-cadence
+failures: WGC's zero `MinUpdateInterval` delivered 48 fps, and sampling from the
+last emitted timestamp reduced 48 fps input to 24 fps for a 30 fps profile.
+Using WGC's supported non-zero interval plus a phase-continuous output cadence
+delivered 29.99 fps and 60.00 fps from the same source. Older Windows versions
+without the optional session interface retain their existing WGC behavior.
+
+A Browser-capture/Pion fanout gate exposed a separate RTP input defect:
+payload-empty padding was rejected and ended the video or audio reader. Chrome
+then fell to a 30 kbps video target even at zero media loss and about 1 ms RTT.
+Discarding padding kept the reader alive but introduced downstream sequence
+gaps, NACKs and reduced decoded cadence. Forwarding valid padding through Pion's
+existing `WriteRTP`, while excluding it from media-frame counts, restored two
+1080p Viewers to about 30 fps with zero packet loss. The same gate passed live
+quality, pause/resume, audio-presence source changes and App-exit fallback.
+Native payload-capacity evidence does not require decoded dimensions; encoded
+receivers can supply real transport evidence without opening a decoder.
+
+DevTools accepted weak-network emulation commands in this loopback run, but RTP
+traffic exceeded the requested limit without the requested loss. That run does
+not establish weak-network quality or automatic fallback performance.
+
+Non-Windows capture keeps the existing process/frame boundary and replaces only
+the platform sidecar. The macOS adapter enumerates `SCShareableContent`, fences
+the selected process/window generation, receives change-driven
+`CMSampleBuffer`s, and requires VideoToolbox constrained-baseline hardware H.264.
+It retains one latest pixel buffer so an existing PLI/FIR can encode a fresh IDR
+even while the screen is unchanged; capture timestamps drive the shared Pion RTP
+clock. A GitHub `macos-15` arm64 runner compiled the sidecar, created the same
+hardware-only encoder, and encoded an in-memory 420v frame into a validated
+`42c01f` SPS/PPS/IDR. The current adapter also emits ScreenCaptureKit application
+or display audio through the common PCM boundary. ScreenCaptureKit permissions,
+real video/audio capture, static-frame recovery, and endurance still require a
+physical Mac.
+
+The Linux adapter lets the XDG ScreenCast Portal own source selection, consumes
+its restricted PipeWire stream through one bounded GStreamer pipeline, and
+requires an installed element classified as a hardware H.264 encoder. It emits
+the same Annex-B protocol and can use the PulseAudio-compatible default monitor
+for system audio; it does not claim per-process audio. GitHub Linux CI compiles,
+probes, packages, starts, and stops the candidate. A real Portal desktop,
+hardware encoder, audio source, Browser decode, and recovery still require a
+physical Linux gate. GStreamer stays a system dependency: bundling another RTC
+or an 80+ MB media runtime would defeat the thin-adapter boundary, while an
+unavailable dependency cleanly leaves Browser capture available.
+
+## Windows Helper Cost (2026-09-29)
+
+At `89a03e64` on Ryzen 7 9700X / RTX 4070 SUPER / Windows 11 26200,
+an instrumented Release helper captured a controlled animated Browser window
+and an offline CS2 scene window. Each run used one 1920x1080 output with an
+8 Mbps ceiling; CPU sampling did not block the encoded-output reader. CPU below
+is a percentage of **one logical core**, not total-machine use. The scene runs
+are sequential observations, not matched gameplay or a cross-device benchmark.
+
+| Source / codec | Target fps | WGC interval | Sample | Admitted / encoded fps | Helper CPU |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Browser / H264 | 30 | 4 ms | 15.8 s | 30.0 / 30.1 | 4.6% |
+| Browser / H264 | 60 | 4 ms | 15.8 s | 60.1 / 60.0 | 9.6% |
+| Browser / VP8 | 60 | 4 ms | 15.7 s | 60.0 / 60.0 | 75.6% |
+| CS2 / H264 | 60 | 4 ms | 45.8 s | 54.8 / 52.7 | 5.7% |
+| CS2 / H264 | 60 | 8 ms | 45.8 s | 53.0 / 51.4 | 5.3% |
+| CS2 / VP8 | 60 | 4 ms | 20.9 s | 54.9 / 53.3 | 82.9% |
+
+Across these runs, NV12 conversion API work averaged 0.060–0.226 ms per frame,
+including texture/view creation; owned-input allocation/copy submission averaged
+0.044–0.048 ms. These are CPU-side call durations, not GPU completion timings.
+They do not justify adding a texture pool. In particular, MFT input samples may
+remain referenced after submission; one mutable reused surface would discard
+the current ownership guarantee. The 8 ms trial establishes no worthwhile gain
+and does not supersede the earlier 144 Hz cadence evidence or the existing 4 ms
+setting, also used by Sunshine.
+
+At 60 fps, explicitly requesting recovery every 250 ms retained 59.9 encoded
+fps on the Browser source and 56.9 on the CS2 source, with normal capture exits.
+A separate unchanged window stayed active for over 20 seconds in each codec;
+recovery requests produced fresh H264 keyframes from its retained image. These
+are one-output stress/idle checks, not proof of multi-output recovery cost or
+endurance. Code tracing also confirms membership/demand changes use recovery to
+wake a quiet source and apply its next output plan; SFU demand emits only on
+change. Removing these requests solely as redundant keyframes is unsafe.
+
+H264 frame-rate bitrate compensation matches Chromium's MFT approach: compensate
+for the fixed configured frame rate without restarting the encoder. An adjusted
+API value above the requested bitrate is not by itself wire-rate overshoot.
+The measured aggregate H264 payload stayed below 8 Mbps, including recovery
+stress; this does not establish every short-window burst or driver behavior.
+
+No automatic capture termination was reproduced. Admitted capture input stayed
+below 60 fps during the CS2 runs; these observations do not separate game render
+cadence, WGC delivery and capture sampling. They also do not measure game FPS
+impact, exclusive fullscreen/display changes, saturated GPU behavior, end-to-end
+decoded media or other GPUs. Software encoding costs more CPU here, but neither
+that result nor the allocation timings establish the reported system-wide lag's
+cause. Retain the existing implementation; reopen optimization from a matched
+bottleneck.
+
+## Native H.264 Motion Quality
+
+Issue [#432](https://github.com/TNTcraftHIM/Piik/issues/432) reports more visible
+blocking with native H.264 than VP8 on v1.6.7. Review of its attached Browser
+report confirms 720p30 in both comparison windows, roughly 11 Mbps received,
+and no reported packet loss; the 1080p60 H.264 window receives roughly 10 Mbps.
+Those samples establish delivered format and transport observations, not equal
+source content or objective picture quality. No encoded stream, reference
+frames or QP measurements accompany that report.
+
+The reporter retracted the initial CBR bitrate-ceiling diagnosis after finding
+that the experimental fixture changed bitrate during the measured interval.
+That switching belongs to `PIIK_H264_FIXTURE` in `windows/main.cpp`, not live
+capture. The corrected experiment reports CBR reaching its requested bitrate.
+Production `h264_encoder.cpp` explicitly requests and validates Baseline; the
+Browser's negotiated `profile-level-id` alone is not an inspection of emitted
+SPS. The later experimental CABAC result cannot establish the production
+Baseline bitstream's behavior. Microsoft's [encoder reference](https://learn.microsoft.com/en-us/windows/win32/medfound/h-264-video-encoder)
+distinguishes profile, rate control and optional quality/speed settings.
+
+The original 720p comparison remains unresolved. An equal-content comparison
+must preserve actual bitrate, frame rate, latency and production codec settings,
+inspect the resulting bitstream and retain reference/decoded pictures. Raising
+the bitrate ceiling, lowering the default frame rate or changing profile is not
+justified by these logs alone; those changes have bandwidth, motion and receiver
+compatibility consequences.
+
+### Profile And Parameter Comparison
+
+Measured 2026-10-03 on Windows 11 26200, RTX 4070 SUPER, driver 32.0.16.1088,
+using the production Media Foundation owner with profile-only research changes.
+Each comparison reused identical FFmpeg `testsrc2` NV12 frames, unchanged CBR,
+low-latency mode, two-second GOP and quality/speed 50. Runs covered six seconds
+at 720p30 and four seconds at 1080p60. FFmpeg decoded the retained Annex-B output;
+PSNR/SSIM comparisons aligned frames by index and checked all output frame types.
+These are synthetic codec comparisons, not a reproduction of the reported game.
+
+| Source / requested bitrate | Baseline: actual Mbps / PSNR dB | Main: actual Mbps / PSNR dB | High: actual Mbps / PSNR dB |
+| --- | --- | --- | --- |
+| 720p30 / 3 Mbps | 3.078 / 43.17 | 3.030 / 44.02 | 3.056 / 44.05 |
+| 720p30 / 11 Mbps | 10.603 / 60.66 | 10.219 / 61.81 | 10.220 / 61.74 |
+| 1080p60 / 10 Mbps | 10.104 / 42.53 | 10.046 / 43.28 | 10.167 / 43.20 |
+
+All streams retained order and had zero B frames. Main/High PPS enabled CABAC;
+explicitly requesting CABAC produced byte-identical output to the corresponding
+profile's default. Baseline PPS correctly disabled CABAC even though the NVIDIA
+property readback returned true: property readback alone is not bitstream proof.
+Median encode time was about 2–3 ms in these paced runs. Quality/speed 100 did not
+consistently improve PSNR, so it does not justify replacing the current preference
+mapping. A one-frame CBR buffer reduced 720p30 actual output to 2.319 Mbps and
+41.08 dB; four frames produced 3.003 Mbps and 43.08 dB. Neither improved on the
+default. The experiment does not establish end-to-end latency.
+
+The [Marpe/Wiegand/Sullivan paper](https://doi.org/10.1109/MCOM.2006.1678121)
+establishes benefits of CABAC and High-profile tools, but its reference-encoder
+comparison used B pictures and several references, not this low-latency MFT.
+[NVIDIA's low-latency guidance](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.1/nvenc-video-encoder-api-prog-guide/index.html#low-latency-encoding)
+supports CBR but requires evaluating buffer/quality tradeoffs; its native SDK
+presets cannot be assumed to map directly to vendor Media Foundation properties.
+
+### WebRTC Profile Compatibility
+
+Checked 2026-10-03. File decoding support, WebRTC negotiation and Piik's forwarded
+bitstream contract are separate capabilities. A higher profile must satisfy all
+three, including downstream relays; hardware support alone is insufficient.
+
+| Platform | Evidence and boundary |
+| --- | --- |
+| Windows Chrome / Edge 154 | Local sender/receiver capabilities advertise Main and High as well as Baseline. This does not establish other devices' hardware support. |
+| Firefox 155 on Windows | An isolated profile with checksum-verified official OpenH264 2.6.0 advertised only Baseline variants. Real Chrome-to-Firefox negotiation decoded 65 Constrained Baseline frames in a 2.2-second observation; Main-only and High-only offers were rejected (`m=video 0`), before media transport. |
+| Safari / iOS / macOS | Current [WebKit codec factories](https://github.com/WebKit/WebKit/blob/main/Source/ThirdParty/libwebrtc/Source/webrtc/webkit_sdk/objc/components/video_codec/RTCDefaultVideoDecoderFactory.m) list Constrained High and Constrained Baseline. Constrained High (`640c`) is a distinct negotiated subset from ordinary High (`6400`). Source review does not replace physical Safari acceptance. |
+| Android Chrome and other Chromium platforms | The [WebRTC decoder factory](https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/platform/peerconnection/rtc_video_decoder_factory.cc) consults platform decoder capabilities. Android additionally [checks profile, level and dimensions](https://github.com/chromium/chromium/blob/main/media/gpu/android/media_codec_video_decoder.cc). No universal device guarantee or phone acceptance is established here. |
+| Piik App on Windows / macOS / Linux | Capture and encoded fanout retain Constrained Baseline. Changing only an encoder setting would leave admission and downstream declarations inconsistent. |
+
+The earlier Firefox probe without GMP was inconclusive; the installed-plugin
+check above supersedes it. [Firefox's current JSEP defaults](https://github.com/mozilla-firefox/firefox/blob/main/dom/media/webrtc/jsep/JsepCodecDescription.h)
+agree with the measured negotiation. Do not infer decoder limits from OpenH264's
+short README: its [release history](https://github.com/cisco/openh264/blob/master/RELEASES)
+records Main/High decoding, which does not change Firefox's advertised profiles.
+The historical [Mozilla interoperability report](https://bugzilla.mozilla.org/show_bug.cgi?id=1411681)
+also distinguishes a decodable bitstream from a profile incorrectly labeled as
+Baseline; it is context, not proof of a current regression.
+
+[RFC 7742](https://www.rfc-editor.org/rfc/rfc7742.html#section-6.2) requires
+Constrained Baseline and recommends Constrained High. Native Main/High adoption
+is declined: the measured synthetic gain does not justify coordinating profile
+fallback across the shared encoded source. Retain the current Constrained
+Baseline, CBR and GOP, without a profile selector or additional transcodes.
+Browser-owned encoders keep ordinary negotiation among their supported profiles;
+the Main-only/High-only rejection above does not rule out a preference list with
+Baseline alternatives. The original field quality cause remains unproven.
+
+One independent compatibility defect was confirmed: capture admission compared
+against `42c0` literally, rejecting equivalent Constrained Baseline SPS such as
+`42e0`. Windows validation and the shared Go capture-state reader now follow
+[RFC 6184 Table 5](https://www.rfc-editor.org/rfc/rfc6184.html#section-8.1), retaining
+the existing level bounds and rejecting actual Main/High. Windows active status
+reads the emitted SPS instead of synthesizing a vendor-specific value. This is
+not a profile upgrade or an explanation for `DXGI_ERROR_DEVICE_REMOVED`.
+
+The same review reproduced a separate Native receive/fanout defect. Pion 4.2.19
+can fall back to MIME-only matching when profile bytes differ. A Safari-order
+offer (`640c1f`, then `42e01f`) selected High, while the unchanged downstream source
+still declared Constrained Baseline; `42e01f` plus VP8 selected VP8 unexpectedly.
+Native SDP now uses the common `42e0` spelling, and the receive owner validates
+the supported coding subset, level and packetization before accepting or reusing
+a source. Capture and receive admission share the RFC profile predicate. This
+repairs the encoded-source contract without changing routing or adding encoding
+paths; it is not evidence for the reported D3D device loss.
+
+Firefox-generated SDP also reproduced audio omission for a valid `bundle-only`
+section with port zero. The receiver had treated every zero port as rejection;
+it now follows [RFC 9143](https://www.rfc-editor.org/rfc/rfc9143.html#section-6),
+retaining the existing inactive/receive-only checks. Piik's current balanced
+Browser offer did not trigger this variant; the max-bundle control did. This is
+a corrected SDP interpretation, not evidence that all Firefox sharing lost audio.
+
+## Media Capability Extension Assessment
+
+Proposal assessed 2026-10-04 for a possible 2.0 phase; this does not change the
+current contract or the profile decision above. Resolution enums are enforced
+by both signaling readers and Native control, while capture admission separately
+bounds dimensions. Native capture, forwarding and SFU declarations also admit
+specific encoded formats. Removing one validator would leave these consumers
+inconsistent.
+
+Source review also distinguishes output geometry from a quality limit. Windows
+`FrameConverter` fits content into the selected landscape raster with a black
+background, so its padding is encoded. Browser display capture instead requests
+landscape width/height ceilings; a portrait source can be reduced unnecessarily
+by the height ceiling. The shared TV uses `object-fit: contain` in a 16:9 stage,
+adding presentation space independently of encoded padding. For example, the
+Windows fit rule places 1080x1920 content at 608x1080 inside a 1920x1080 output.
+This is a code-derived result, not a new physical capture measurement. Evaluate
+orientation-independent limits and preservation of source aspect ratio together;
+adding numeric fields alone would retain the current geometry limitation.
+
+The restriction extends beyond resolution labels: shared readers also bound
+frame rate and bitrate, and Native's selectable profile admits four exact raster
+pairs while derived outputs admit other dimensions within axis-specific limits.
+These are different meanings. Keep explicit resource ceilings, but assess them
+separately from presets and device capability; arbitrary numbers are not the
+replacement contract.
+
+The smallest proposed extension separates UI presets from numeric media limits
+and uses existing WebRTC codec negotiation. The
+[Media Capture specification](https://www.w3.org/TR/mediacapture-streams/)
+distinguishes requested constraints, supported ranges and actual settings;
+[WebRTC capabilities](https://www.w3.org/TR/webrtc/#rtcrtpsender-interface)
+advertise optimistic codec support, not guaranteed hardware execution. Preserve
+actual encoder admission and validate dimensions, pixel counts, frame sizes and
+resource bounds at their existing owners.
+
+Codec support must distinguish encoding, decoding and encoded forwarding,
+including profile/packetization and SFU admission. AV1 and VP9 are candidates to
+evaluate, not promised product formats. A late Viewer or relay that cannot
+receive the current encoded source needs an explicit policy; SDP negotiation
+alone cannot convert that source. Per-Viewer transcodes or room-wide codec
+switches are not implied by this proposal.
+
+Current discovery couples format to implementation (`hardwareH264` and
+`softwareVP8`), and Browser preference uses a VP8-specific fallback flag.
+Capture, forwarding and SFU each correctly reject formats they cannot process,
+but adding another format therefore needs coordinated changes beyond SDP.
+Assess a small format-specific capability description at these existing owners
+only when selecting a concrete additional codec; no codec plugin system is
+proposed. Browser-to-App fanout is currently H.264-gated and falls back to ordinary
+Browser senders, so that optimization is not evidence that VP8 sharing is broken.
+
+Under [versioning](../standards/versioning.md#extending-interfaces), unknown
+descriptive capabilities may be ignored, but unsupported commands are not sent
+or executed. Numeric limits and advertised optional formats could make future
+resolution/codec additions compatible minor releases. 4K itself does not
+inherently require a major; breaking an existing public contract does. Evaluate
+the Browser/App/Server and mixed-peer flows before freezing a replacement
+contract; avoid a general compatibility framework.
+
+## Source 2560x1600 High-Rate Matrix (2026-10-14)
+
+RTX 4060 Laptop, 2560x1600 @ 240 Hz panel, `scripts/app-media-matrix.ts`
+(App loopback control, one local Chrome viewer, barcode pattern, PSNR vs the
+regenerated reference). Raw runs: `build/media-matrix/`.
+
+| Codec / config | Delivered fps (p5) | PSNR | Notes |
+| --- | --- | --- | --- |
+| H.264 Source @60, 20-100 Mbps | 60 (54-59) | 46.7-47.5 dB | clean |
+| H.264 Source @120, 51-160 Mbps | 120 (115-118) | 47.0-47.5 dB | clean; 20 Mbps let WebRTC's quality scaler drop to 1920x1200 |
+| H.264 Source @240 | clamped to 129 (Level 5.2) | 46.9-47.2 dB | clean |
+| AV1 Source @60-120, 20-160 Mbps | 60/90/120 (p5 >= 95) | 55.0-55.7 dB | clean except one 120/51 cell with 17 drops |
+| AV1 Source @240 | 238 at 20 Mbps; collapses at >= 51 Mbps | 52.9-55.6 dB | viewer-side loss/PLI loop |
+| H.264 / AV1 1080p, 720p @240, 51 Mbps | 221-237 | - | clean, except AV1 1080p240 (933 viewer drops) |
+
+At >= 100 Mbps some cells collapse at the viewer (fps near 0). Loss appears as
+RTP sequence gaps with PLI bursts, while the App's bounded pacer reports zero
+dropped packets. This is receive-side loss on the one-machine loopback,
+triggered by large keyframe bursts, and was not reproduced remotely.
+
+Reliability (`reliability --repeat=10`, Source @120 / 51 Mbps): H.264 65/65 and
+AV1 65/65 steps. Steps were stop/restart, reselect display<->window, live source
+switch, live profile updates (incl. Source/160 Mbps, 720p/240, 480p/30),
+pause/resume, viewer reconnect and App kill + restart.
+
+Endurance at Source @120 / 51 Mbps:
+- H.264, 30 min: 116.7-119.3 fps/min, PSNR 46.95-47.49 dB, 0 freezes, 0 drops.
+  App memory steady at 55-58 MB; helper handles flat around 705. Helper working
+  set rose from 97 to 113 MB, which is worth a longer run.
+- AV1, 10 min: 118.6-119.4 fps/min, PSNR 55.2-55.7 dB, 0 freezes, 0 drops.
+  Helper memory 116-120 MB.
+
+Fixed during this run:
+- The H.264 level allowlist now includes 5.2.
+- Source is resolved before encoder selection.
+- Helper-resolved Source outputs are accepted.
+- Telemetry caps are raised to 320 Mbps / 480 fps.
+- AV1 is a request failure rather than a control-socket violation.
+- The SPS level check is pinned to the configured profile, not the live bitrate.
+  Before this, live updates such as 1080p240 -> 720p120 failed when WebRTC had
+  lowered the bitrate.
+
+Native AV1 uses the NVIDIA AV1 MFT and is explicit-only. Auto stays
+H.264 -> VP8, because every viewer on an AV1 route must decode AV1.
+
+## Implementation Boundary
+
+- `nativecapture` owns the child process, source identity, and bounded frame protocol.
+- `mediaedge` owns shared encoded sources and independent PeerConnections with
+  their connection-scoped UDP discovery, mapping and socket lifetime.
+- `nativehost` owns the current capture generation and its bounded stable edges.
+- `nativeviewer` owns one native inbound media source and its encoded child
+  edges; it does not own room or route state.
+- `nativecontrol` maps local source/share/receive/edge commands and exact native
+  sender quality windows, live profile updates, and source replacement to the
+  current loopback wire.
+
+The deleted sender application, UI, room client, and old wire are not
+compatibility inputs. Historical measurements remain in the separately marked
+[native sender evidence](./native-sender.md).
+
+## Primary Sources
+
+- [Windows Graphics Capture](https://learn.microsoft.com/en-us/windows/apps/develop/media-authoring-processing/screen-capture)
+- [WGC `MinUpdateInterval`](https://learn.microsoft.com/en-us/uwp/api/windows.graphics.capture.graphicscapturesession.minupdateinterval)
+- [Sunshine WGC update interval](https://github.com/LizardByte/Sunshine/blob/master/src/platform/windows/display_wgc.cpp)
+- [WGC `CreateForWindow`](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createforwindow)
+- [WASAPI process loopback](https://learn.microsoft.com/en-us/samples/microsoft/windows-classic-samples/applicationloopbackaudio-sample/)
+- [OBS application-audio capture guide](https://obsproject.com/kb/application-audio-capture-guide/)
+- [Media Foundation hardware MFTs](https://learn.microsoft.com/en-us/windows/win32/medfound/hardware-mfts)
+- [MFT input sample ownership](https://learn.microsoft.com/en-us/windows/win32/api/mftransform/nf-mftransform-imftransform-processinput)
+- [Chromium MFT frame-rate compensation](https://chromium.googlesource.com/chromium/src/+/master/media/gpu/windows/media_foundation_video_encode_accelerator_win.cc)
+- [Pion v4.2.18 stats implementation](https://github.com/pion/webrtc/blob/v4.2.18/stats.go)
+- [WebRTC Stats target bitrate and limitation semantics](https://www.w3.org/TR/webrtc-stats/)
+- [WebRTC remote-track constraints](https://www.w3.org/TR/webrtc/#mediastreamtrack-network-use)
+- [Pion single-port ICE](https://github.com/pion/webrtc/tree/master/examples/ice-single-port)
+- [Pion broadcast relay](https://github.com/pion/webrtc/tree/master/examples/broadcast)
+- [gopus pure-Go Opus codec](https://github.com/thesyncim/gopus)
+- [Tailscale port mapper](https://github.com/tailscale/tailscale/tree/main/net/portmapper)
+- [libp2p NAT port mapping](https://github.com/libp2p/go-libp2p/blob/master/options.go)
+- [NetBird standalone Go NAT](https://github.com/netbirdio/go-nat)
+- [WebRTC signaling and ICE](https://webrtc.org/getting-started/peer-connections)
+- [Apple ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit)
+- [ScreenCaptureKit audio output](https://developer.apple.com/documentation/screencapturekit/scstreamoutputtype/audio)
+- [ScreenCaptureKit idle frames](https://developer.apple.com/documentation/screencapturekit/scframestatus/idle)
+- [Apple VideoToolbox hardware encoder requirement](https://developer.apple.com/documentation/videotoolbox/kvtvideoencoderspecification_requirehardwareacceleratedvideoencoder)
+- [XDG ScreenCast Portal](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.ScreenCast.html)
+- [libportal](https://libportal.org/libportal.html)
+- [PipeWire DMA-BUF contract](https://docs.pipewire.org/devel/page_dma_buf.html)
+- [GStreamer PipeWire source](https://gstreamer.freedesktop.org/documentation/pipewire/pipewiresrc.html)
