@@ -2,6 +2,8 @@
 rem Starts the Piik App with its native capture helper and public-link tunnel.
 rem Usage: Start-Piik.bat          normal start (opens the launcher in your browser)
 rem        Start-Piik.bat debug    also writes diagnostics to logs\
+rem        Start-Piik.bat window   opens Piik in its own window (H.264 only)
+rem        Start-Piik.bat debug window   both
 setlocal
 set "ROOT=%~dp0"
 set "APP=%ROOT%build\dist\piik-app.exe"
@@ -25,8 +27,11 @@ powershell -NoProfile -Command "Get-Process cloudflared -ErrorAction SilentlyCon
 
 set "EXTRA="
 if /I "%~1"=="debug" set EXTRA=--debug --log-dir "%ROOT%logs"
+set "WINDOW="
+if /I "%~1"=="window" set WINDOW=--window
+if /I "%~2"=="window" set WINDOW=--window
 
 echo Starting Piik App... (close this window to stop it)
-"%APP%" --capture-process "%CAPTURE%" --tunnel-process "%TUNNEL%" %EXTRA%
+"%APP%" --capture-process "%CAPTURE%" --tunnel-process "%TUNNEL%" %EXTRA% %WINDOW%
 echo Piik App exited with code %ERRORLEVEL%.
 pause

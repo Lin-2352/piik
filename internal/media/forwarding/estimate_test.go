@@ -65,19 +65,23 @@ func TestLossGuardCutsOnlyOnPersistentLoss(t *testing.T) {
 }
 
 func TestProbeCapacityUsesDeliveredRateWhenFinalizeReturnsThePlaceholder(t *testing.T) {
-	if got := probeCapacity(estimatorPlaceholderBps, 34_900_000); got != 34_900_000 {
-		t.Fatalf("placeholder not replaced: %d", got)
+	if got := probeCapacity(estimatorPlaceholderBps, 34_900_000, 30_000_000); got != 34_900_000 {
+		t.Fatalf("placeholder not replaced by the delivered rate: %d", got)
 	}
-	if got := probeCapacity(0, 12_000_000); got != 12_000_000 {
+	// Seen on the user's PC: goal 24.7 Mbps, padding delivered only 18.8 Mbps.
+	if got := probeCapacity(estimatorPlaceholderBps, 18_800_000, 24_700_000); got != 24_700_000 {
+		t.Fatalf("a clean probe's goal was not credited: %d", got)
+	}
+	if got := probeCapacity(0, 12_000_000, 0); got != 12_000_000 {
 		t.Fatalf("missing estimate not replaced: %d", got)
 	}
-	if got := probeCapacity(25_000_000, 34_900_000); got != 25_000_000 {
+	if got := probeCapacity(25_000_000, 34_900_000, 40_000_000); got != 25_000_000 {
 		t.Fatalf("a real estimate was overridden: %d", got)
 	}
 	// From the frozen 19.5 Mbps start, two clean probes reach the ceiling cap.
 	target := int64(19_512_000)
 	for range 3 {
-		target = adoptEstimate(target, probeCapacity(estimatorPlaceholderBps, 60_000_000), 38_000_000, true)
+		target = adoptEstimate(target, probeCapacity(estimatorPlaceholderBps, 20_000_000, 60_000_000), 38_000_000, true)
 	}
 	if target != 57_000_000 {
 		t.Fatalf("target did not grow to the ceiling cap: %d", target)

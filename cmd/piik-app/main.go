@@ -34,7 +34,7 @@ func run(args []string) int {
 	})
 	flags.BoolVar(&options.Local, "local", false, "use the self-contained Local room authority")
 	flags.BoolVar(&options.Link, "link", false, "create one public Viewer invitation link")
-	flags.BoolVar(&options.UseBrowser, "browser", false, "open the system browser instead of the Piik window")
+	flags.BoolVar(&options.UseWindow, "window", false, "open Piik in its own window instead of the browser (Windows; H.264 only)")
 	flags.BoolVar(&options.Debug, "debug", false, "save opt-in App diagnostics to rotated files")
 	flags.StringVar(&options.LogDir, "log-dir", "", "diagnostic directory (overrides PIIK_LOG_DIR)")
 	flags.StringVar(&options.CaptureProcess, "capture-process", "", "path to the platform native capture process")

@@ -97,7 +97,16 @@ func (output *Output) reconcileLocked() {
 			// A rate-controlled top layer is lowered to the budget by its encoder,
 			// so its last measurement may exceed the budget for a moment.
 			overshoot := ok && spatial > 0 && controlled.RateControlled(spatial) && output.floorDivisor()*remaining >= int64(output.layerCeiling(spatial))
-			_, used := output.ProvisionalAllocate(remaining,
+			capacity := remaining
+			if overshoot && int(spatial) < len(rates) && int(temporal) < len(rates[spatial]) {
+				// The library only honours overshoot above the maximum layer, so
+				// it would reject this layer whenever its last measurement (an IDR,
+				// rate-control variance) exceeds the budget, and the viewer would
+				// flip to the half-size copy. Its encoder follows the budget, so
+				// the measurement is not a cost to fit: admit it as it stands.
+				capacity = max(capacity, rates[spatial][temporal])
+			}
+			_, used := output.ProvisionalAllocate(capacity,
 				buffer.VideoLayer{Spatial: spatial, Temporal: temporal}, !(keepLowest && spatial == 0), overshoot)
 			remaining -= used
 		}

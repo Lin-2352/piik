@@ -300,14 +300,15 @@ embedded SFU delivery have explicit gates. macOS and Linux capture still
 require physical desktop/media gates; CI compilation and package smoke do not
 substitute for them.
 
-## Piik window (Windows)
+## Piik window (Windows, opt-in)
 
-On Windows the App shows its page in its own window instead of a browser tab:
-the same local page, hosted in WebView2 (the Edge engine that ships with
-Windows 11). Closing the window quits the App. Pass `--browser` to use the
-system browser instead; the App also falls back to the browser when the
-WebView2 runtime is missing, and macOS and Linux always use the browser.
+`--window` shows the App's page in its own window instead of a browser tab: the
+same local page, hosted in WebView2 (the Edge engine that ships with Windows
+11). Closing the window quits the App. Without the flag, or when the WebView2
+runtime is missing, and always on macOS and Linux, the App uses the browser.
 
-The window's WebRTC cannot receive H.265 (enabling it crashes the renderer), so
-a Host running in the window chooses automatic codec selection (H.264) instead
-of H.265, because the Host previews its own share by receiving it.
+The window is opt-in because WebView2 cannot play H.265: enabling its H.265
+receive feature crashes the page as soon as an H.265 stream arrives (tested,
+`STATUS_ACCESS_VIOLATION`). The Host previews its own share by receiving it, so
+in the window it uses automatic codec selection (H.264) and hides H.265. Use the
+browser for H.265.

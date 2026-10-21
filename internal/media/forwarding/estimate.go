@@ -44,12 +44,14 @@ func adoptEstimate(current, capacity, ceiling int64, raising bool) int64 {
 
 // probeCapacity is what a clean probe proved. LiveKit's finalize returns its
 // stored estimate, which stays at the placeholder until real congestion, so a
-// probe is judged by the rate it actually delivered without congesting.
-func probeCapacity(reported int64, delivered float64) int64 {
+// probe is judged itself: it pushed toward its goal and the link showed no
+// congestion. Padding generation, not the link, often keeps the delivered rate
+// below the goal, so the goal counts as proven; growth stays capped per probe.
+func probeCapacity(reported int64, delivered float64, goal int) int64 {
 	if reported > 0 && reported != estimatorPlaceholderBps {
 		return reported
 	}
-	return int64(delivered)
+	return max(int64(delivered), int64(goal))
 }
 
 // lossGuard is the missing downward signal. The estimator only sees packets

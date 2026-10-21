@@ -61,8 +61,9 @@ type Options struct {
 	LANAddress     string
 	Port           int
 	DisableBrowser bool
-	// UseBrowser keeps the system browser even where a native window exists.
-	UseBrowser     bool
+	// UseWindow shows the page in Piik's own window (Windows, WebView2). It is
+	// opt-in: WebView2 cannot play H.265, which the browser can.
+	UseWindow      bool
 	Debug          bool
 	LogDir         string
 	CaptureProcess string
@@ -76,7 +77,7 @@ func Run(ctx context.Context, options Options) (returnedErr error) {
 	ctx, cancel := context.WithCancel(ctx)
 	options.Debug = options.Debug || debugEnabled(os.Getenv("PIIK_DEBUG"))
 	options.console = newConsole(cancel, options.DisableBrowser)
-	options.console.openURL = openTarget(options.UseBrowser, cancel)
+	options.console.openURL = openTarget(options.UseWindow, cancel)
 	var recorder *diagnostics.Recorder
 	var restoreLogger func()
 	defer func() {
