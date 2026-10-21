@@ -299,3 +299,15 @@ media delivery to an independent Linux peer. Native P2P quality evidence and
 embedded SFU delivery have explicit gates. macOS and Linux capture still
 require physical desktop/media gates; CI compilation and package smoke do not
 substitute for them.
+
+## Piik window (Windows)
+
+On Windows the App shows its page in its own window instead of a browser tab:
+the same local page, hosted in WebView2 (the Edge engine that ships with
+Windows 11). Closing the window quits the App. Pass `--browser` to use the
+system browser instead; the App also falls back to the browser when the
+WebView2 runtime is missing, and macOS and Linux always use the browser.
+
+The window's WebRTC cannot receive H.265 (enabling it crashes the renderer), so
+a Host running in the window chooses automatic codec selection (H.264) instead
+of H.265, because the Host previews its own share by receiving it.

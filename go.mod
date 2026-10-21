@@ -16,6 +16,7 @@ require (
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/coder/websocket v1.8.15
 	github.com/go-logr/logr v1.4.4
+	github.com/jchv/go-webview2 v0.0.0-20260205173254-56598839c808
 	github.com/livekit/livekit-server v1.13.6
 	github.com/livekit/mediatransportutil v0.0.0-20260821083140-f234b534b095
 	github.com/livekit/protocol v1.50.5-0.20260821144838-17c16cf496fd
@@ -37,6 +38,7 @@ require (
 	golang.org/x/mod v0.38.0
 	golang.org/x/net v0.57.0
 	golang.org/x/sync v0.22.0
+	golang.org/x/sys v0.47.0
 	golang.org/x/text v0.41.0
 	google.golang.org/protobuf v1.36.11
 	modernc.org/sqlite v1.58.0
@@ -73,6 +75,7 @@ require (
 	github.com/hashicorp/go-retryablehttp v0.7.8 // indirect
 	github.com/huin/goupnp v1.2.0 // indirect
 	github.com/jackpal/go-nat-pmp v1.0.2 // indirect
+	github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect
 	github.com/jellydator/ttlcache/v3 v3.4.1 // indirect
 	github.com/josharian/native v1.1.0 // indirect
 	github.com/jxskiss/base62 v1.1.0 // indirect
@@ -123,7 +126,6 @@ require (
 	go.uber.org/zap/exp v0.3.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/exp v0.0.0-20260727155853-b88d891fe743 // indirect
-	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260803160001-6ac0973c030d // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260803160001-6ac0973c030d // indirect

@@ -61,6 +61,8 @@ type Options struct {
 	LANAddress     string
 	Port           int
 	DisableBrowser bool
+	// UseBrowser keeps the system browser even where a native window exists.
+	UseBrowser     bool
 	Debug          bool
 	LogDir         string
 	CaptureProcess string
@@ -74,6 +76,7 @@ func Run(ctx context.Context, options Options) (returnedErr error) {
 	ctx, cancel := context.WithCancel(ctx)
 	options.Debug = options.Debug || debugEnabled(os.Getenv("PIIK_DEBUG"))
 	options.console = newConsole(cancel, options.DisableBrowser)
+	options.console.openURL = openTarget(options.UseBrowser, cancel)
 	var recorder *diagnostics.Recorder
 	var restoreLogger func()
 	defer func() {

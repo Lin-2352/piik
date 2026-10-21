@@ -11,6 +11,21 @@ export const VP8_ONLY_VIDEO_CODEC: BrowserVideoCodecPreference = {
   vp8Fallback: false,
 };
 
+/**
+ * Whether this page can receive H.265 over WebRTC. Chrome can; some embedded
+ * webviews (and the Piik window) cannot, and enabling it there crashes the
+ * renderer. The Host previews its own share by receiving it, so it must not
+ * choose a codec its own page cannot decode.
+ */
+export function browserCanReceiveH265(): boolean {
+  try {
+    const codecs = RTCRtpReceiver.getCapabilities?.("video")?.codecs ?? [];
+    return codecs.some(({ mimeType }) => mimeType.toLowerCase() === "video/h265");
+  } catch {
+    return false;
+  }
+}
+
 export function automaticVideoCodecPreference(
   codec: BrowserVideoCodec,
 ): BrowserVideoCodecPreference {

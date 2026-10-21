@@ -67,3 +67,13 @@ describe("default encoder", () => {
     expect(completeHostSettings({ captureBorder: true }, defaultHostSettings(true)).codec).toBe("h265");
   });
 });
+
+describe("H.265 on a page that cannot receive it", () => {
+  it("falls back to automatic selection instead of a stream it cannot preview", async () => {
+    const { usableHostSettings } = await import("../src/client/lib/host-settings");
+    const settings = completeHostSettings({ codec: "h265" });
+    expect(usableHostSettings(settings, true).codec).toBe("h265");
+    expect(usableHostSettings(settings, false).codec).toBe("auto");
+    expect(usableHostSettings({ ...settings, codec: "h264" }, false).codec).toBe("h264");
+  });
+});

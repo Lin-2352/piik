@@ -32,6 +32,7 @@ import { SharingSettings } from "../components/living/SharingSettings";
 import { SavedSettings } from "../components/living/SavedSettings";
 import {
   defaultHostSettings,
+  usableHostSettings,
   completeHostSettings,
   deletePreset,
   loadLocalHostSettings,
@@ -201,6 +202,7 @@ import {
 } from "../webrtc/media-assignment";
 import {
   automaticVideoCodecPreference,
+  browserCanReceiveH265,
   manualVideoCodecPreference,
   type BrowserVideoCodec,
   type BrowserVideoCodecMode,
@@ -454,12 +456,13 @@ export function HostPage({
   const hostSettingsTouchedRef = useRef(false);
   // Known once the App's health is read; decides whether H.265 is the default.
   const hardwareHEVCRef = useRef(false);
+  const canReceiveH265Ref = useRef(browserCanReceiveH265());
   useEffect(() => {
     let current = true;
     const restore = (file: HostSettingsFile) => {
       if (!hostSettingsTouchedRef.current && activeGenerationRef.current === null) {
-        const defaults = defaultHostSettings(hardwareHEVCRef.current);
-        if (file.last) applyHostSettings(completeHostSettings(file.last, defaults), true);
+        const defaults = defaultHostSettings(hardwareHEVCRef.current && canReceiveH265Ref.current);
+        if (file.last) applyHostSettings(usableHostSettings(completeHostSettings(file.last, defaults), canReceiveH265Ref.current), true);
         else if (defaults.codec !== videoCodecModeRef.current) changeVideoCodecMode(defaults.codec);
       }
     };
@@ -1748,7 +1751,7 @@ export function HostPage({
   function applyHostSettings(settings: HostSettings, restoring = false): void {
     if (!restoring) hostSettingsTouchedRef.current = true;
     void changeQuality(settings.quality);
-    changeVideoCodecMode(settings.codec);
+    changeVideoCodecMode(usableHostSettings(settings, canReceiveH265Ref.current).codec);
     changeRoutePolicy({
       topologyOptimization: settings.topologyOptimization && !sfuOnly,
       natPrediction: settings.natPrediction && natPredictionAvailable && !sfuOnly,
@@ -3907,7 +3910,7 @@ export function HostPage({
                 }}
                 onSave={name => setHostSettingsFile(file => savePreset(file, name, currentHostSettings()))}
                 onDelete={name => setHostSettingsFile(file => deletePreset(file, name))}
-                onReset={() => applyHostSettings(defaultHostSettings(hardwareHEVCRef.current))} />
+                onReset={() => applyHostSettings(defaultHostSettings(hardwareHEVCRef.current && canReceiveH265Ref.current))} />
             }
             presets={
               <QualityPresets selected={selectedQualityProfileId} busy={changingQuality}
@@ -4228,7 +4231,7 @@ export function HostPage({
                   role="group"
                   aria-label={t("host.advanced.codec")}
                 >
-                  {(["vp8", "auto", "h264", "h265", "av1"] as const).map((mode) => (
+                  {(["vp8", "auto", "h264", "h265", "av1"] as const).filter((mode) => mode !== "h265" || canReceiveH265Ref.current).map((mode) => (
                     <Chip
                       key={mode}
                       selected={displayedVideoCodecMode === mode}
