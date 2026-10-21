@@ -460,6 +460,7 @@ func (transport *Transport) driveProbeLocked() {
 			if signal, capacity, finalized := transport.estimator.ProbeClusterFinalize(); finalized {
 				valid := sendsidebwe.DefaultSendSideBWEConfig.CongestionDetector.ProbeSignal.IsValid(transport.probe)
 				if valid && signal == ccutils.ProbeSignalNotCongesting && !transport.loss.cooling(time.Now()) {
+					capacity = probeCapacity(capacity, transport.probe.Result.Bitrate())
 					transport.target.Store(adoptEstimate(transport.target.Load(), capacity, transport.targetCeiling(), true))
 				}
 				transport.probe = ccutils.ProbeClusterInfoInvalid

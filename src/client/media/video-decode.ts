@@ -36,7 +36,8 @@ async function decodeSupport(
         framerate: 60,
       },
     });
-    if (!info.supported) return "supported";
+    // The browser says it cannot decode this codec; the Host must know.
+    if (!info.supported) return "none";
     return info.powerEfficient ? "hardware" : "software";
   } catch {
     // The receiver lists the codec; this browser cannot say how it decodes.

@@ -42,6 +42,16 @@ func adoptEstimate(current, capacity, ceiling int64, raising bool) int64 {
 	return max(capacity, minTargetBps)
 }
 
+// probeCapacity is what a clean probe proved. LiveKit's finalize returns its
+// stored estimate, which stays at the placeholder until real congestion, so a
+// probe is judged by the rate it actually delivered without congesting.
+func probeCapacity(reported int64, delivered float64) int64 {
+	if reported > 0 && reported != estimatorPlaceholderBps {
+		return reported
+	}
+	return int64(delivered)
+}
+
 // lossGuard is the missing downward signal. The estimator only sees packets
 // that were numbered and sent, so loss on the path, and NACK storms, never move
 // it. Receiver reports carry the loss the viewer actually experienced: when it
