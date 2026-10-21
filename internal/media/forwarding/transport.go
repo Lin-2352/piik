@@ -51,6 +51,7 @@ type Transport struct {
 	probe        ccutils.ProbeClusterInfo
 	target       atomic.Int64
 	hold         budgetHold
+	loss         lossGuard
 	pacer        *boundedPacer
 	observed     atomic.Bool
 	mu           sync.Mutex
@@ -160,11 +161,12 @@ func NewTransport(options TransportOptions) (_ *Transport, err error) {
 	transport.Output.onActivity = transport.mediaActivity
 	transport.Output.onDemandChanged = options.OnDemandChanged
 	track.SetStreamAllocatorListener(transport)
-	track.AddReceiverReportListener(func(*sfu.DownTrack, *rtcp.ReceiverReport) {
+	track.AddReceiverReportListener(func(_ *sfu.DownTrack, report *rtcp.ReceiverReport) {
 		transport.mu.Lock()
 		defer transport.mu.Unlock()
 		if !transport.closed {
 			transport.paddingReady = true
+			transport.observeLossLocked(report)
 			transport.driveProbeLocked()
 		}
 	})
@@ -360,9 +362,38 @@ func (transport *Transport) OnTransportCCFeedback(_ *sfu.DownTrack, packet *rtcp
 // HandleTWCCFeedback invokes this synchronously under the transport's event
 // lock. Store the framework result without reentering that lock.
 func (transport *Transport) OnCongestionStateChange(_, _ bwe.CongestionState, capacity int64) {
-	if capacity > 0 {
-		transport.target.Store(capacity)
+	transport.target.Store(adoptEstimate(transport.target.Load(), capacity, transport.targetCeiling(), false))
+}
+
+// targetCeiling is the highest layer ceiling; there is nothing to send beyond it.
+func (transport *Transport) targetCeiling() int64 {
+	if transport.Output == nil {
+		return 0
 	}
+	return int64(max(transport.Output.layerCeiling(0), transport.Output.layerCeiling(1)))
+}
+
+// observeLossLocked lowers the target when a viewer keeps reporting loss that
+// the send-side estimator cannot see (it only knows packets that were sent).
+func (transport *Transport) observeLossLocked(report *rtcp.ReceiverReport) {
+	if report == nil {
+		return
+	}
+	var fraction uint8
+	for _, reception := range report.Reports {
+		fraction = max(fraction, reception.FractionLost)
+	}
+	current := transport.hold.value
+	if current == 0 {
+		current = transport.target.Load()
+	}
+	next, cut := transport.loss.observe(float64(fraction)/256, current, time.Now())
+	if !cut {
+		return
+	}
+	transport.target.Store(next)
+	transport.hold = budgetHold{value: next} // a cut is congestion: no waiting
+	transport.refreshBudgetLocked()
 }
 
 func (*Transport) OnREMB(*sfu.DownTrack, *rtcp.ReceiverEstimatedMaximumBitrate) {}
@@ -428,8 +459,8 @@ func (transport *Transport) driveProbeLocked() {
 		if transport.probe.Result.EndTime != 0 {
 			if signal, capacity, finalized := transport.estimator.ProbeClusterFinalize(); finalized {
 				valid := sendsidebwe.DefaultSendSideBWEConfig.CongestionDetector.ProbeSignal.IsValid(transport.probe)
-				if valid && signal == ccutils.ProbeSignalNotCongesting && capacity > transport.target.Load() {
-					transport.target.Store(capacity)
+				if valid && signal == ccutils.ProbeSignalNotCongesting && !transport.loss.cooling(time.Now()) {
+					transport.target.Store(adoptEstimate(transport.target.Load(), capacity, transport.targetCeiling(), true))
 				}
 				transport.probe = ccutils.ProbeClusterInfoInvalid
 				transport.refreshBudgetLocked()
@@ -485,7 +516,14 @@ func (transport *Transport) OnSendProbe(bytesToSend int) {
 	if transport.probe.Id == ccutils.ProbeClusterIdInvalid || transport.probe.Result.EndTime != 0 {
 		return
 	}
-	written := transport.Output.WriteProbePackets(bytesToSend, true)
+	// Padding is numbered when it is written, so a packet the pacer later refuses
+	// is a permanent hole in the video stream. Never write more than the pacer
+	// can hold; the probe simply runs shorter.
+	room := transport.pacer.limit/16 - transport.pacer.pendingCount()
+	if room <= 0 {
+		return
+	}
+	written := transport.Output.WriteProbePackets(min(bytesToSend, room*probePaddingPacketBytes), true)
 	transport.prober.ProbesSent(written)
 	// Zero can be a temporary non-frame-boundary. The library-supplied cluster
 	// duration bounds retries; only connection/RR authority controls readiness.
@@ -498,6 +536,9 @@ func (transport *Transport) OnPacerProbeObserverClusterComplete(id ccutils.Probe
 		transport.stopProbeLocked()
 	}
 }
+
+// An upper bound on one padding packet on the wire, used to size writes.
+const probePaddingPacketBytes = 300
 
 type EgressStats struct {
 	// Drops include canceled probe padding and queued packets retired at close.
@@ -567,9 +608,16 @@ func (queue *boundedPacer) cancelProbes(id ccutils.ProbeClusterId) {
 		}
 	}
 	queue.mu.Unlock()
+	// The packet already has an RTP sequence number. Discarding it leaves a hole
+	// the viewer can never fill (padding is not retransmitted), which stalls
+	// decoding until the next key frame, so a cancelled probe packet is sent now.
 	for _, packet := range packets {
-		queue.dropped.Add(1)
-		queue.discard(packet)
+		written, err := queue.sender.SendPacket(packet)
+		if err == nil && written > 0 {
+			queue.packets.Add(1)
+			queue.bytes.Add(uint64(written))
+			queue.last.Store(time.Now().UnixNano())
+		}
 	}
 }
 

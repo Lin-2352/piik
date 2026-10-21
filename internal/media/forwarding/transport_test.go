@@ -376,37 +376,38 @@ func TestBoundedPacerReleasesPacketsAndIsolatesBlockedQueue(t *testing.T) {
 	}
 }
 
-func TestBoundedPacerCanceledProbesRetainAdmission(t *testing.T) {
+func TestBoundedPacerCanceledProbesAreSentNotDiscarded(t *testing.T) {
 	log := logger.GetDiscardLogger()
 	sender := pacer.NewPassThrough(log, nil)
 	held := &heldPacketPacer{Pacer: sender}
-	queue := newBoundedPacer(held, log, 2)
+	queue := newBoundedPacer(held, log, 4)
 	defer queue.Stop()
+	writer := &countingPacketWriter{}
 	packet := func() *pacer.Packet {
-		return &pacer.Packet{Header: &rtp.Header{Version: 2}, HeaderSize: 12,
-			Payload: make([]byte, 100), WriteStream: &countingPacketWriter{}, IsProbe: true, ProbeClusterId: 1}
+		header := &rtp.Header{Version: 2, SSRC: 1}
+		payload := make([]byte, 100)
+		return &pacer.Packet{Header: header, HeaderSize: header.MarshalSize(),
+			HeaderPool: &sync.Pool{}, Pool: &sync.Pool{}, PoolEntity: &payload,
+			Payload: payload, WriteStream: writer, IsProbe: true, ProbeClusterId: 1}
 	}
 	queue.Enqueue(packet())
 	queue.Enqueue(packet())
-	for range 10 {
-		queue.cancelProbes(1)
-		queue.Enqueue(packet())
+	queue.cancelProbes(1)
+	// A numbered padding packet that never leaves is a hole the viewer cannot
+	// fill, so cancelling sends it instead of dropping it.
+	if stats := queue.stats(); stats.DroppedPackets != 0 || stats.Packets != 2 || writer.bytes != 224 {
+		t.Fatalf("cancelled probes were dropped: stats=%+v written=%d", stats, writer.bytes)
 	}
-	if len(queue.pending) != 2 || len(held.packets) != 2 || queue.stats().DroppedPackets != 12 {
-		t.Fatalf("canceled proxies freed admission before dequeue: pending=%d queued=%d stats=%+v",
-			len(queue.pending), len(held.packets), queue.stats())
+	// The proxies still queued upstream stay inert and keep their admission slots
+	// until actually dequeued.
+	if len(queue.pending) != 2 || len(held.packets) != 2 {
+		t.Fatalf("proxy admission freed early: pending=%d queued=%d", len(queue.pending), len(held.packets))
 	}
-	sender.Enqueue(held.packets[0])
-	queue.Enqueue(packet())
-	if len(queue.pending) != 2 || len(held.packets) != 3 {
-		t.Fatal("actual dequeue did not return its admission slot")
-	}
-	queue.Stop()
-	for _, proxy := range held.packets[1:] {
+	for _, proxy := range held.packets {
 		sender.Enqueue(proxy)
 	}
-	if stats := queue.stats(); stats.Packets != 0 || stats.DroppedPackets != 13 {
-		t.Fatalf("canceled ownership was sent or retired twice: %+v", stats)
+	if stats := queue.stats(); stats.Packets != 2 || writer.bytes != 224 {
+		t.Fatalf("a cancelled packet was sent twice: stats=%+v written=%d", stats, writer.bytes)
 	}
 }
 
