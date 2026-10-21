@@ -347,6 +347,21 @@ func (edge *Edge) SelectedPair() (SelectedPair, error) {
 	}, nil
 }
 
+// iceRTTMs is the STUN round trip of the selected pair, the same value the
+// viewer shows; -1 when unknown. It bypasses the pacer, so it measures queueing
+// on the network path only.
+func (edge *Edge) iceRTTMs() float64 {
+	transport := edge.sender.Transport()
+	if transport == nil || transport.ICETransport() == nil {
+		return -1
+	}
+	stats, ok := transport.ICETransport().GetSelectedCandidatePairStats()
+	if !ok {
+		return -1
+	}
+	return stats.CurrentRoundTripTime * 1000
+}
+
 func selectedNatTraversalPath(foundations ...string) string {
 	for _, foundation := range foundations {
 		if len(foundation) < 3 || foundation[0] != 's' ||

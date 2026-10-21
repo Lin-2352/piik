@@ -352,7 +352,12 @@ func (transport *Transport) OnTransportCCFeedback(_ *sfu.DownTrack, packet *rtcp
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	if !transport.closed {
+		started := time.Now()
 		transport.estimator.HandleTWCCFeedback(packet)
+		// Every forwarded packet waits on this lock; a slow estimator stalls the edge.
+		if held := time.Since(started); held > 5*time.Millisecond {
+			slog.Debug("twcc-feedback-slow", "rtcPeerId", diagnostics.ID(transport.PC.ID()), "heldMs", held.Milliseconds())
+		}
 		transport.observed.Store(true)
 		transport.refreshBudgetLocked()
 		transport.driveProbeLocked()
