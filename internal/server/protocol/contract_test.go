@@ -778,3 +778,24 @@ func TestQualitySettingsBitrateModeIsOptionalAndValidated(t *testing.T) {
 		t.Fatal("an unknown bitrate mode must be rejected")
 	}
 }
+
+func TestViewerEvidenceAcceptsOptionalReceiveCounters(t *testing.T) {
+	base := `{"natTraversalPath":"ordinary","width":1920,"height":1080,"framesPerSecond":60,"bitrateKbps":7500,"packetsReceivedDelta":1500,"packetsLostDelta":0,"rttMs":18,"jitterMs":3,"framesDecodedDelta":120,"framesDroppedDelta":0,"decodeMsPerFrame":2,"freezeCountDelta":0,"freezeDurationMsDelta":0,"pauseCountDelta":0,"pauseDurationMsDelta":0,"codec":"video/H264","codecProfile":null,"codecParameters":null,"audioBitrateKbps":192,"audioPacketLossPercent":0,"audioJitterMs":2,"audioVideoPlayoutDeltaMs":0,"videoJitterBufferDelayMs":20,"audioJitterBufferDelayMs":20,"audioConcealedSamplesPercent":0,"audioConcealmentEventsDelta":0,"audioCodec":"audio/opus"`
+	for _, extra := range []string{
+		``,
+		`,"framesReceivedDelta":120,"keyFramesDecodedDelta":1,"pliCountDelta":2,"nackCountDelta":3,"powerEfficientDecoder":true`,
+		`,"framesReceivedDelta":null,"powerEfficientDecoder":null`,
+	} {
+		var metrics ViewerQualityEvidenceMetrics
+		if err := json.Unmarshal([]byte(base+extra+"}"), &metrics); err != nil {
+			t.Fatalf("%q: %v", extra, err)
+		}
+	}
+	var metrics ViewerQualityEvidenceMetrics
+	if err := json.Unmarshal([]byte(base+`,"pliCountDelta":-1}`), &metrics); err == nil {
+		t.Fatal("a negative counter must be rejected")
+	}
+	if err := json.Unmarshal([]byte(base+`,"decoderImplementation":"device-specific-decoder"}`), &metrics); err == nil {
+		t.Fatal("a decoder name identifies the device and must be rejected")
+	}
+}

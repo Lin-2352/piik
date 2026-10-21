@@ -34,6 +34,10 @@ export interface StatsAccumulator {
   previousPacketsReceived: number | null;
   previousPacketsLost: number | null;
   previousFramesDropped: number | null;
+  previousFramesReceived: number | null;
+  previousKeyFramesDecoded: number | null;
+  previousPliCount: number | null;
+  previousNackCount: number | null;
   previousFreezeCount: number | null;
   previousTotalFreezesDuration: number | null;
   previousPauseCount: number | null;
@@ -242,6 +246,10 @@ export function createStatsAccumulator(): StatsAccumulator {
     previousPacketsReceived: null,
     previousPacketsLost: null,
     previousFramesDropped: null,
+    previousFramesReceived: null,
+    previousKeyFramesDecoded: null,
+    previousPliCount: null,
+    previousNackCount: null,
     previousFreezeCount: null,
     previousTotalFreezesDuration: null,
     previousPauseCount: null,
@@ -861,6 +869,16 @@ export function collectConnectionMetricsFromReport(
     previous.previousFramesDropped,
     sampleWindowMs !== null,
   );
+  // Receive-side counters that separate a network problem (frames never arrive,
+  // NACKs) from a decoder problem (frames arrive but are not decoded).
+  const framesReceived = direction === "receive" ? numberValue(media, "framesReceived") : null;
+  const keyFramesDecoded = direction === "receive" ? numberValue(media, "keyFramesDecoded") : null;
+  const pliCount = direction === "receive" ? numberValue(media, "pliCount") : null;
+  const nackCount = direction === "receive" ? numberValue(media, "nackCount") : null;
+  const intervalFramesReceived = intervalDelta(framesReceived, previous.previousFramesReceived, sampleWindowMs !== null);
+  const intervalKeyFramesDecoded = intervalDelta(keyFramesDecoded, previous.previousKeyFramesDecoded, sampleWindowMs !== null);
+  const intervalPliCount = intervalDelta(pliCount, previous.previousPliCount, sampleWindowMs !== null);
+  const intervalNackCount = intervalDelta(nackCount, previous.previousNackCount, sampleWindowMs !== null);
   const intervalFreezeCount = intervalDelta(
     freezeCount,
     previous.previousFreezeCount,
@@ -926,6 +944,10 @@ export function collectConnectionMetricsFromReport(
   previous.previousPacketsReceived = packetsReceived;
   previous.previousPacketsLost = packetsLost;
   previous.previousFramesDropped = framesDropped;
+  previous.previousFramesReceived = framesReceived;
+  previous.previousKeyFramesDecoded = keyFramesDecoded;
+  previous.previousPliCount = pliCount;
+  previous.previousNackCount = nackCount;
   previous.previousFreezeCount = freezeCount;
   previous.previousTotalFreezesDuration = totalFreezesDuration;
   previous.previousPauseCount = pauseCount;
@@ -1165,6 +1187,12 @@ export function collectConnectionMetricsFromReport(
       direction === "send" ? scalabilityModeValue(media) : null,
     encoderImplementation: stringValue(media, "encoderImplementation"),
     powerEfficientEncoder: booleanValue(media, "powerEfficientEncoder"),
+    decoderImplementation: direction === "receive" ? stringValue(media, "decoderImplementation") : null,
+    powerEfficientDecoder: direction === "receive" ? booleanValue(media, "powerEfficientDecoder") : null,
+    intervalFramesReceived,
+    intervalKeyFramesDecoded,
+    intervalPliCount,
+    intervalNackCount,
     intervalFramesEncoded,
     intervalEncodeTimeMs:
       encodeTimeDelta === null ? null : encodeTimeDelta * 1_000,

@@ -693,6 +693,14 @@ export const viewerQualityEvidenceMetricsSchema = z
       .max(64)
       .regex(/^audio\/[A-Za-z0-9.+-]{1,32}$/i)
       .nullable(),
+    // Optional: they tell a network-bound Viewer from a decoder-bound one.
+    framesReceivedDelta: nullableEvidenceInteger(10_000).optional(),
+    keyFramesDecodedDelta: nullableEvidenceInteger(10_000).optional(),
+    pliCountDelta: nullableEvidenceInteger(100_000).optional(),
+    nackCountDelta: nullableEvidenceInteger(1_000_000).optional(),
+    // Hardware decode as a yes/no only: decoder names identify devices and stay
+    // on the Viewer (see the device-fingerprint wire sample).
+    powerEfficientDecoder: z.boolean().nullable().optional(),
   })
   .strict()
   .refine(

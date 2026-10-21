@@ -71,6 +71,12 @@ export interface ConnectionMetrics {
   scalabilityMode: string | null;
   encoderImplementation: string | null;
   powerEfficientEncoder: boolean | null;
+  decoderImplementation: string | null;
+  powerEfficientDecoder: boolean | null;
+  intervalFramesReceived: number | null;
+  intervalKeyFramesDecoded: number | null;
+  intervalPliCount: number | null;
+  intervalNackCount: number | null;
   intervalFramesEncoded: number | null;
   intervalFramesSent: number | null;
   intervalEncodeTimeMs: number | null;
@@ -158,6 +164,12 @@ export const EMPTY_METRICS: ConnectionMetrics = {
   scalabilityMode: null,
   encoderImplementation: null,
   powerEfficientEncoder: null,
+  decoderImplementation: null,
+  powerEfficientDecoder: null,
+  intervalFramesReceived: null,
+  intervalKeyFramesDecoded: null,
+  intervalPliCount: null,
+  intervalNackCount: null,
   intervalFramesEncoded: null,
   intervalFramesSent: null,
   intervalEncodeTimeMs: null,
