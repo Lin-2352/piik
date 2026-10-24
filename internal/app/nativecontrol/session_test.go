@@ -799,3 +799,26 @@ func TestBitrateModeDefaultsToVariableAndIsGatedByTheHelper(t *testing.T) {
 		t.Fatalf("a helper that cannot take the flag must not be asked, got %q", got)
 	}
 }
+
+func TestCapEdgeFrameRateOwnsOneStrictRequestShape(t *testing.T) {
+	session := New("missing-capture-process", nativecapture.Capabilities{}, false)
+	t.Cleanup(func() { _ = session.Close() })
+	for _, capped := range []string{"true", "false"} {
+		valid := `{"version":9,"id":"request_frame_cap","type":"cap-edge-frame-rate","shareId":"share_123456","connectionId":"edge_1234567","capped":` + capped + `}`
+		value, err := session.Handle(t.Context(), []byte(valid))
+		if err != nil {
+			t.Fatalf("capped=%s rejected: %v", capped, err)
+		}
+		if reply, ok := value.(responseEnvelope); !ok || reply.Type != "edge-frame-rate-capped" || reply.ID != "request_frame_cap" {
+			t.Fatalf("capped=%s reply = %#v", capped, value)
+		}
+	}
+	for _, invalid := range []string{
+		`{"version":9,"id":"request_frame_cap","type":"cap-edge-frame-rate","shareId":"share_123456","connectionId":"edge_1234567"}`,
+		`{"version":9,"id":"request_frame_cap","type":"cap-edge-frame-rate","shareId":"share_123456","connectionId":"edge_1234567","capped":true,"fps":60}`,
+	} {
+		if _, err := session.Handle(t.Context(), []byte(invalid)); err == nil || err.Error() != "native cap-edge-frame-rate request is invalid" {
+			t.Fatalf("invalid frame-rate cap accepted: %s (%v)", invalid, err)
+		}
+	}
+}
