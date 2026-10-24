@@ -340,7 +340,8 @@ bool TrySetU32(ICodecAPI* codec, const GUID& key, UINT32 value) {
 }
 
 UINT32 TemporalLayerCount(OutputKind kind, const VideoProfile& profile) {
-  return kind == OutputKind::h265 && profile.frame_rate >= 100 ? 2 : 1;
+  const bool layered = kind == OutputKind::h265 || kind == OutputKind::h264;
+  return layered && profile.frame_rate >= 100 ? 2 : 1;
 }
 
 void ConfigureCodec(
@@ -547,6 +548,10 @@ NalSummary InspectAnnexB(const std::vector<UINT8>& bytes) {
       summary.sps = summary.sps || nal_type == 7;
       summary.pps = summary.pps || nal_type == 8;
       summary.idr = summary.idr || nal_type == 5;
+      // SVC prefix NAL: temporal_id is the top three bits of its fourth byte.
+      if (nal_type == 14 && nal_end - nal_start >= 4) {
+        summary.temporal_id = std::max<UINT8>(summary.temporal_id, bytes[nal_start + 3] >> 5);
+      }
       if (nal_type == 7 && nal_end - nal_start >= 4) {
         std::string value = ProfileLevelId(bytes[nal_start + 1],
                                            bytes[nal_start + 2],
@@ -896,7 +901,9 @@ EncodedAccessUnit LiveEncoder::Encode(
       }
       profile_level_id_ = nal.profile_level_id;
     }
-    if (force_key_frame && !(nal.sps && nal.pps && nal.idr)) {
+    // An enhancement-layer slot cannot become a key frame; the request carries
+    // to the next base-layer frame (adaptive_encoder keeps it pending).
+    if (force_key_frame && !(nal.sps && nal.pps && nal.idr) && nal.temporal_id == 0) {
       Fail("bitstream-recovery-unit",
            "requested live recovery unit lacks SPS, PPS, or IDR");
     }

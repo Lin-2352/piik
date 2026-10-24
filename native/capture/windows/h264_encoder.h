@@ -183,6 +183,7 @@ struct NalSummary final {
   bool sps = false;
   bool pps = false;
   bool idr = false;
+  UINT8 temporal_id = 0;  // from an SVC prefix NAL (14); 0 for a single-layer stream
   std::optional<std::string> profile_level_id;
 };
 
@@ -253,8 +254,8 @@ NalSummary InspectAnnexB(const std::vector<UINT8>& bytes);
 ObuSummary InspectObus(const std::vector<UINT8>& bytes);
 HevcSummary InspectHevc(const std::vector<UINT8>& bytes);
 // Two temporal layers let the Host send a viewer that cannot decode the full
-// rate every other frame. Only HEVC carries the layer where the forwarder reads
-// it, and only a rate whose half stays smooth (>= 50 fps) is split.
+// rate every other frame. HEVC carries the layer in its NAL header and H.264 in
+// an SVC prefix NAL; only a rate whose half stays smooth (>= 50 fps) is split.
 UINT32 TemporalLayerCount(OutputKind kind, const VideoProfile& profile);
 std::vector<UINT8> ReadSample(IMFSample* sample);
 

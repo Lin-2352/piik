@@ -185,6 +185,21 @@ void CheckHevcInspection() {
   assert(enhancement.picture && !enhancement.irap && enhancement.temporal_id == 1);
 }
 
+// NVIDIA's H.264 temporal layers, as captured: a base key frame is AUD, SPS, PPS,
+// SVC prefix NAL 14 (temporal_id 0) and IDR; an enhancement frame is AUD, prefix
+// (temporal_id 1, nal_ref_idc 0) and a non-reference slice.
+void CheckH264TemporalInspection() {
+  const auto base = InspectAnnexB({0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x67, 0x42, 0xc0, 0x34,
+                                   0, 0, 0, 1, 0x68, 0xce, 0, 0, 0, 1, 0x6e, 0xc0, 0x80, 0x07,
+                                   0, 0, 0, 1, 0x65, 0x88});
+  assert(base.annex_b && base.sps && base.pps && base.idr && base.temporal_id == 0);
+  const auto enhancement = InspectAnnexB({0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x0e, 0x40, 0x80, 0x27,
+                                          0, 0, 0, 1, 0x01, 0x9a});
+  assert(enhancement.annex_b && !enhancement.idr && enhancement.temporal_id == 1);
+  // Without a prefix NAL the stream is single-layer.
+  assert(InspectAnnexB({0, 0, 0, 1, 0x41, 0x9a}).temporal_id == 0);
+}
+
 // Two temporal layers only where halving still leaves smooth motion (>= 50 fps)
 // and the viewer cap can read them (LiveKit parses the HEVC temporal id).
 void CheckTemporalLayers() {
@@ -192,7 +207,8 @@ void CheckTemporalLayers() {
   assert(TemporalLayerCount(OutputKind::h265, VideoProfile{2560, 1600, 100}) == 2);
   assert(TemporalLayerCount(OutputKind::h265, VideoProfile{2560, 1600, 90}) == 1);
   assert(TemporalLayerCount(OutputKind::h265, VideoProfile{2560, 1600, 60}) == 1);
-  assert(TemporalLayerCount(OutputKind::h264, VideoProfile{2560, 1600, 120}) == 1);
+  assert(TemporalLayerCount(OutputKind::h264, VideoProfile{2560, 1600, 120}) == 2);
+  assert(TemporalLayerCount(OutputKind::h264, VideoProfile{2560, 1600, 90}) == 1);
   assert(TemporalLayerCount(OutputKind::av1, VideoProfile{2560, 1600, 120}) == 1);
 }
 
@@ -336,6 +352,7 @@ void CheckSurfaceSample(ID3D11Device* device) {
 
 int main() {
   CheckTemporalLayers();
+  CheckH264TemporalInspection();
   VideoProfile profile{2560, 1440, 60, 12'000'000};
   ValidateVideoProfile(profile);
   assert(profile.h264_level() == 51 && profile.profile_level_id() == "42c033");
