@@ -179,6 +179,7 @@ import {
   type FrameRateCapState,
   INITIAL_FRAME_RATE_CAP,
   nextFrameRateCap,
+  startsFrameRateCapped,
 } from "../media/frame-rate-cap";
 import type {
   ConnectionMetrics,
@@ -708,6 +709,16 @@ export function HostPage({
   const qualitySettingsRef = useRef<QualitySettings>(DEFAULT_QUALITY_SETTINGS);
   // Per native viewer peer; a reconnect gets a new peer and a fresh decision.
   const frameRateCapsRef = useRef(new WeakMap<NativeSenderPeer, FrameRateCapState>());
+  // Viewers that said they are a mobile browser: capped from the first frame of
+  // a 100+ fps share instead of after several stalled evidence windows.
+  const mobileViewerPeersRef = useRef(new Set<string>());
+  // The Host's native edge for this viewer starts capped when it must.
+  const startsCappedFor = (viewerPeerId: string): boolean =>
+    startsFrameRateCapped(mobileViewerPeersRef.current.has(viewerPeerId), qualitySettingsRef.current.maxFramerate);
+  const rememberStartedCapped = (peer: NativeSenderPeer, cappedAtStart: boolean): NativeSenderPeer => {
+    if (cappedAtStart) frameRateCapsRef.current.set(peer, { behind: 0, capped: true });
+    return peer;
+  };
   const routePolicyRef = useRef<RoutePolicy>(routePolicy);
   const advancedQualityRef = useRef<QualitySettings>(advancedQuality);
   const videoCodecModeRef = useRef<BrowserVideoCodecMode>(videoCodecMode);
@@ -2178,7 +2189,8 @@ export function HostPage({
                   input.natPredictionEnabled,
                 );
               }
-              return new NativeSenderPeer(
+              const cappedAtStart = startsCappedFor(candidate.childPeerId);
+              return rememberStartedCapped(new NativeSenderPeer(
                 candidate.childPeerId,
                 candidate.connectionId,
                 nativeShareGeneration,
@@ -2188,7 +2200,8 @@ export function HostPage({
                 events,
                 videoCodecRef.current.primary,
                 nativeMediaIngressRef.current?.source,
-              );
+                cappedAtStart,
+              ), cappedAtStart);
             }
           : undefined,
     });
@@ -2275,8 +2288,9 @@ export function HostPage({
         acceptHostPeerUpdate(peer, snapshot, generation);
       },
     };
+    const cappedAtStart = useNative && startsCappedFor(peerId);
     peer = useNative
-      ? new NativeSenderPeer(
+      ? rememberStartedCapped(new NativeSenderPeer(
           peerId,
           createOpaqueId(),
           nativeShareGeneration!,
@@ -2286,7 +2300,8 @@ export function HostPage({
           peerEvents,
           videoCodecRef.current.primary,
           nativeMediaIngressRef.current?.source,
-        )
+          cappedAtStart,
+        ), cappedAtStart)
       : new HostPeer(
           peerId,
           iceConfig,
@@ -2756,6 +2771,10 @@ export function HostPage({
             return;
           }
           if (message.type === "viewer-presence") {
+            mobileViewerPeersRef.current = new Set(
+              message.viewers.flatMap((viewer) =>
+                viewer.role === "viewer" && viewer.videoDecode?.mobile === true ? [viewer.peerId] : []),
+            );
             retainViewerQualityEvidenceForPresence(message.viewers);
             setParticipantPresence(message.viewers);
             return;

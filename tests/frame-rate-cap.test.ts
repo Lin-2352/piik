@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   INITIAL_FRAME_RATE_CAP,
   nextFrameRateCap,
+  startsFrameRateCapped,
   type FrameRateCapState,
 } from "../src/client/media/frame-rate-cap";
 
@@ -152,5 +153,22 @@ describe("per-viewer frame-rate cap", () => {
   it("ignores windows without receive counters or with too few frames", () => {
     expect(afterWarmup([window(null, 0)])[0].capped).toBe(false);
     expect(afterWarmup([window(4, 0)])[0].capped).toBe(false);
+  });
+});
+
+describe("starting a mobile viewer capped", () => {
+  it("caps a mobile browser from its first frame when the share carries 100 fps or more", () => {
+    expect(startsFrameRateCapped(true, 120)).toBe(true);
+    expect(startsFrameRateCapped(true, 100)).toBe(true);
+  });
+
+  it("leaves a share below 100 fps alone: the viewer sees the same rate either way", () => {
+    expect(startsFrameRateCapped(true, 90)).toBe(false);
+    expect(startsFrameRateCapped(true, 60)).toBe(false);
+  });
+
+  it("never caps an unflagged or unknown viewer up front: those are judged by evidence", () => {
+    expect(startsFrameRateCapped(false, 120)).toBe(false);
+    expect(startsFrameRateCapped(undefined, 120)).toBe(false);
   });
 });

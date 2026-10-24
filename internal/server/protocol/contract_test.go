@@ -349,6 +349,18 @@ func TestViewerPresenceConstructors(t *testing.T) {
 	if err := decoded.UnmarshalJSON(encoded); err != nil || decoded.VideoDecode == nil || decoded.VideoDecode.H265 != "none" {
 		t.Fatalf("viewer videoDecode did not round-trip: %+v, %v", decoded, err)
 	}
+	if decoded.VideoDecode.Mobile || bytes.Contains(encoded, []byte("mobile")) {
+		t.Fatalf("mobile must be omitted unless set: %s", encoded)
+	}
+	encoded, err = marshalJSON(NewViewerPresenceEntry(
+		"viewer_12345678", "小明", SfuUpstream(), true, &VideoDecode{AV1: "software", H265: "none", Mobile: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := decoded.UnmarshalJSON(encoded); err != nil || decoded.VideoDecode == nil || !decoded.VideoDecode.Mobile ||
+		!bytes.Contains(encoded, []byte(`"mobile":true`)) {
+		t.Fatalf("mobile did not round-trip: %s, %v", encoded, err)
+	}
 	for _, invalid := range []string{
 		`{"role":"viewer","peerId":"viewer_12345678","displayName":"a","upstream":{"kind":"sfu"},"videoDecode":{"av1":"fast","h265":"none"}}`,
 		`{"role":"viewer","peerId":"viewer_12345678","displayName":"a","upstream":{"kind":"sfu"},"videoDecode":{"av1":"none"}}`,

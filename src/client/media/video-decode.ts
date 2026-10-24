@@ -5,7 +5,7 @@ import type {
 
 // Browsers decode H264 and VP8 everywhere WebRTC exists. AV1 and H265 depend
 // on the browser and, for smooth playback at screen sizes, on hardware decode.
-export type OptionalVideoCodec = keyof VideoDecode;
+export type OptionalVideoCodec = "av1" | "h265";
 
 const OPTIONAL_CODEC_MIME_TYPES: Record<OptionalVideoCodec, string> = {
   av1: "video/av1",
@@ -45,6 +45,15 @@ async function decodeSupport(
   }
 }
 
+/** A phone or tablet browser, by client hint, else by the user agent. */
+function isMobileBrowser(): boolean {
+  const nav = typeof navigator === "undefined"
+    ? undefined
+    : (navigator as Navigator & { userAgentData?: { mobile?: boolean } });
+  if (typeof nav?.userAgentData?.mobile === "boolean") return nav.userAgentData.mobile;
+  return /Mobi|Android|iPhone|iPad|iPod/i.test(nav?.userAgent ?? "");
+}
+
 let probed: VideoDecode | undefined;
 
 /** Starts once per page; the Viewer reports the result when it authenticates. */
@@ -54,6 +63,7 @@ export const videoDecodeProbe: Promise<VideoDecode | undefined> = (async () => {
     probed = {
       av1: await decodeSupport(OPTIONAL_CODEC_MIME_TYPES.av1, receivable),
       h265: await decodeSupport(OPTIONAL_CODEC_MIME_TYPES.h265, receivable),
+      ...(isMobileBrowser() ? { mobile: true } : {}),
     };
     return probed;
   } catch {

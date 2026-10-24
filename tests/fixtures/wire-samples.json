@@ -101,6 +101,18 @@
       "valid": false
     },
     {
+      "name": "authenticate-viewer-video-decode-mobile",
+      "schema": "client",
+      "json": "{\"type\":\"authenticate\",\"protocol\":\"piik-v23\",\"roomId\":\"1234\",\"role\":\"viewer\",\"clientId\":\"client_12345678\",\"videoDecode\":{\"av1\":\"software\",\"h265\":\"hardware\",\"mobile\":true}}",
+      "valid": true
+    },
+    {
+      "name": "authenticate-viewer-video-decode-mobile-not-boolean",
+      "schema": "client",
+      "json": "{\"type\":\"authenticate\",\"protocol\":\"piik-v23\",\"roomId\":\"1234\",\"role\":\"viewer\",\"clientId\":\"client_12345678\",\"videoDecode\":{\"av1\":\"software\",\"h265\":\"hardware\",\"mobile\":\"yes\"}}",
+      "valid": false
+    },
+    {
       "name": "authenticate-viewer-carries-host-token",
       "schema": "client",
       "json": "{\"type\":\"authenticate\",\"protocol\":\"piik-v23\",\"roomId\":\"1234\",\"role\":\"viewer\",\"clientId\":\"client_12345678\",\"token\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",

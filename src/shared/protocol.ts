@@ -105,7 +105,13 @@ const activeMediaRouteUpstreamSchema = z.discriminatedUnion("kind", [
 export const videoDecodeSupportSchema = z.enum(["hardware", "software", "supported", "none"]);
 export type VideoDecodeSupport = z.infer<typeof videoDecodeSupportSchema>;
 export const videoDecodeSchema = z
-  .object({ av1: videoDecodeSupportSchema, h265: videoDecodeSupportSchema })
+  .object({
+    av1: videoDecodeSupportSchema,
+    h265: videoDecodeSupportSchema,
+    // Present only for a mobile browser: the Host starts it at half the frame
+    // rate of a 100+ fps share instead of waiting for it to stall.
+    mobile: z.boolean().optional(),
+  })
   .strict();
 export type VideoDecode = z.infer<typeof videoDecodeSchema>;
 

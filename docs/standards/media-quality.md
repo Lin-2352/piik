@@ -155,7 +155,10 @@ caps a direct viewer through `cap-edge-frame-rate`, only to an App that advertis
 two warm-up windows, then caps at once when a loss-free window decodes under 25%
 of what the stream should carry, or after three weak windows (under 85%) in a row.
 A window that lost packets is never counted as weak: a lost frame is not a slow
-decoder. Viewers fed through a relay or the SFU are not judged, so a phone placed
+decoder. A viewer that reports itself as a mobile browser (`videoDecode.mobile`, from the
+client hint or user agent) is capped from its first frame when the share carries
+100 fps or more, so a phone never receives the stream it cannot decode; below
+100 fps the flag does nothing. Viewers fed through a relay or the SFU are not judged, so a phone placed
 behind either keeps the full rate. The forwarding output drops that viewer's
 enhancement layer and renumbers the rest, so its sequence stays gap-free and NACKs
 still resolve. LiveKit reads the HEVC layer from the NAL header; for H.264 the

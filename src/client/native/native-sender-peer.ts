@@ -45,6 +45,7 @@ export class NativeSenderPeer implements HostMediaPeer {
     events: NativeSenderPeerEvents,
     codec: NativeVideoCodec,
     private readonly source?: NativeSenderSource,
+    private readonly startCapped = false,
   ) {
     this.connectionId = connectionId;
     this.snapshot = {
@@ -150,7 +151,11 @@ export class NativeSenderPeer implements HostMediaPeer {
     if (this.disposed) return false;
     if (this.source && !(await this.updateProfile(this.source.getProfile()))) return false;
     if (this.disposed) return false;
-    return this.edge.start();
+    const started = await this.edge.start();
+    // The edge exists now and no media flows before the answer is accepted, so
+    // a viewer that must start capped never receives an uncapped frame.
+    if (started && this.startCapped) this.capFrameRate();
+    return started;
   }
 
   async acceptSignal(payload: SignalPayload): Promise<void> {

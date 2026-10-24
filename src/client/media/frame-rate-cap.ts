@@ -34,6 +34,13 @@ const BEHIND_RATIO = 0.85;
 // Weak windows in a row before a viewer that is not stalled is capped.
 const BEHIND_WINDOWS = 3;
 
+// A mobile browser cannot hold a 100+ fps share, and waiting for evidence costs
+// several seconds of discarded frames at join. Below 100 fps halving would not
+// stay smooth, so there is nothing to cap up front.
+export function startsFrameRateCapped(mobile: boolean | undefined, shareFramerate: number): boolean {
+  return mobile === true && shareFramerate / 2 >= MIN_CAPPED_FRAMERATE;
+}
+
 export function nextFrameRateCap(
   state: FrameRateCapState,
   metrics: {

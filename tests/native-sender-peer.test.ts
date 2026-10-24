@@ -162,3 +162,42 @@ describe("native Host peer frame-rate cap", () => {
     expect(capEdgeFrameRate).toHaveBeenCalledWith("share_1234567", "edge_12345678", true);
   });
 });
+
+describe("native Host peer starting capped", () => {
+  const build = (startCapped?: boolean) => {
+    const order: string[] = [];
+    const capEdgeFrameRate = vi.fn(async () => { order.push("cap"); });
+    const control: NativeEdgeControl = {
+      updateShare: vi.fn(async () => undefined),
+      prepareEdge: vi.fn<NativeEdgeControl["prepareEdge"]>(async () => { order.push("prepare"); return { type: "offer", sdp: "v=0\r\n" }; }),
+      acceptSignal: vi.fn(async () => undefined),
+      closeEdge: vi.fn(async () => undefined),
+      capEdgeFrameRate,
+      onEvent: vi.fn(() => () => undefined),
+    };
+    const peer = new NativeSenderPeer(
+      "viewer_123456", "edge_12345678", "share_1234567",
+      { iceServers: [], natPredictionStunUrls: [] }, false, control,
+      { sendSignal: () => true, onUpdate: () => undefined }, "h265", undefined, startCapped,
+    );
+    return { peer, capEdgeFrameRate, order };
+  };
+
+  it("caps once, right after the edge exists and before any media can flow", async () => {
+    const { peer, capEdgeFrameRate, order } = build(true);
+    expect(await peer.start()).toBe(true);
+    expect(capEdgeFrameRate).toHaveBeenCalledTimes(1);
+    expect(capEdgeFrameRate).toHaveBeenCalledWith("share_1234567", "edge_12345678", true);
+    expect(order).toEqual(["prepare", "cap"]);
+    peer.capFrameRate();
+    expect(capEdgeFrameRate).toHaveBeenCalledTimes(1);
+    peer.dispose();
+  });
+
+  it("does not cap a peer that was not asked to start capped", async () => {
+    const { peer, capEdgeFrameRate } = build(false);
+    expect(await peer.start()).toBe(true);
+    expect(capEdgeFrameRate).not.toHaveBeenCalled();
+    peer.dispose();
+  });
+});

@@ -826,8 +826,9 @@ func (v *RouteDiagnosticSnapshot) UnmarshalJSON(data []byte) error {
 // VideoDecode mirrors videoDecodeSchema: how a Viewer decodes the codecs that
 // browsers do not all play.
 type VideoDecode struct {
-	AV1  string `json:"av1"`
-	H265 string `json:"h265"`
+	AV1    string `json:"av1"`
+	H265   string `json:"h265"`
+	Mobile bool   `json:"mobile,omitempty"`
 }
 
 func validVideoDecodeSupport(value string) bool {

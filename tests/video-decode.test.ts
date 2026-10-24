@@ -71,6 +71,34 @@ describe("viewer video decode", () => {
   });
 });
 
+describe("viewer mobile flag", () => {
+  const probeWith = async (nav: Record<string, unknown>) => {
+    stubReceiver(["video/H264", "video/H265"]);
+    vi.stubGlobal("navigator", {
+      mediaCapabilities: { decodingInfo: vi.fn(async () => ({ supported: true, smooth: true, powerEfficient: true })) },
+      ...nav,
+    });
+    const { videoDecodeProbe } = await load();
+    return videoDecodeProbe;
+  };
+
+  it("reports a mobile browser from the client hint", async () => {
+    await expect(probeWith({ userAgentData: { mobile: true } })).resolves.toMatchObject({ mobile: true });
+  });
+
+  it("falls back to the user agent when there is no client hint", async () => {
+    await expect(probeWith({ userAgent: "Mozilla/5.0 (Linux; Android 14; RMX3561) AppleWebKit/537.36 Chrome/155.0 Mobile Safari/537.36" }))
+      .resolves.toMatchObject({ mobile: true });
+  });
+
+  it("omits the flag for a desktop browser", async () => {
+    const hinted = await probeWith({ userAgentData: { mobile: false } });
+    const plain = await probeWith({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/155.0 Safari/537.36" });
+    expect(hinted).not.toHaveProperty("mobile");
+    expect(plain).not.toHaveProperty("mobile");
+  });
+});
+
 describe("host viewer decode status", () => {
   const ready = { mediaReady: true as const, upstream: { kind: "sfu" as const } };
 
