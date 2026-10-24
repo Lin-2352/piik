@@ -20,9 +20,8 @@ templates live in `.github/`; [naming](../../CONTRIBUTING.md#commit-pr-and-branc
 is shared with automatic version selection.
 
 These protections are active, including conversation resolution. GitHub Pages
-uses the **GitHub Actions** publishing source and the `piik.tv` custom domain;
-the repository homepage points to `https://piik.tv`. The dedicated Website
-workflow publishes the static site under [website operations](./website.md).
+is not enabled for this repository, so the dedicated Website workflow runs only
+by manual dispatch; see [website operations](./website.md) to publish the static site.
 
 ## Enable Automatic Publication Once
 

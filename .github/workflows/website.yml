@@ -1,12 +1,9 @@
 name: Website
 
 on:
-  # Publish the website after main's checks complete.
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches:
-      - main
+  # Manual only. GitHub Pages is not enabled for this repository, so a deploy
+  # after every push to main would fail; enable Pages (source: GitHub Actions)
+  # first, then dispatch this workflow from main.
   workflow_dispatch:
 
 permissions:
@@ -18,12 +15,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      (github.event_name == 'workflow_dispatch' ||
-       (github.event.workflow_run.event == 'push' &&
-        github.event.workflow_run.head_branch == 'main' &&
-        github.event.workflow_run.conclusion == 'success'))
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -36,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@v6
         with:
           node-version-file: .node-version

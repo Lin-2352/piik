@@ -223,6 +223,11 @@ func TestPublicationSimulcastReuseAudioDemandAndClose(t *testing.T) {
 	if publication.LowestLayerBudget() != 1_000 {
 		t.Fatal("paused higher output retained the lowest encoder's budget")
 	}
+	// The stream allocator marks the committed deficit on its own goroutine, so it
+	// can land just after the requested bandwidth drops: wait for it, not for luck.
+	for !publication.Counters().Limited && ctx.Err() == nil {
+		time.Sleep(5 * time.Millisecond)
+	}
 	if publication.bandwidth.CongestionState() != bwe.CongestionStateNone || !publication.Counters().Limited {
 		t.Fatalf("clear transport feedback hid the committed publication allocation deficit: state=%v counters=%+v low=%v high=%v", publication.bandwidth.CongestionState(), publication.Counters(), publication.tracks[0].IsDeficient(), publication.tracks[1].IsDeficient())
 	}
