@@ -262,6 +262,7 @@ export const nativeAckResponseSchema = z
       "edge-answer-accepted",
       "edge-candidate-accepted",
       "edge-closed",
+      "edge-frame-rate-capped",
       "receive-candidate-accepted",
       "receiver-closed",
       "receive-stopped",

@@ -175,6 +175,11 @@ import {
   type ViewerQualityEvidencePresentation,
 } from "../media/viewer-quality-evidence";
 import { ViewerQualityEvidenceStore } from "../media/viewer-quality-evidence-store";
+import {
+  type FrameRateCapState,
+  INITIAL_FRAME_RATE_CAP,
+  nextFrameRateCap,
+} from "../media/frame-rate-cap";
 import type {
   ConnectionMetrics,
   PeerSnapshot,
@@ -701,6 +706,8 @@ export function HostPage({
   const qualityChangeRef = useRef<object | null>(null);
   const pendingQualityChangeRef = useRef<QualitySettings | null>(null);
   const qualitySettingsRef = useRef<QualitySettings>(DEFAULT_QUALITY_SETTINGS);
+  // Per native viewer peer; a reconnect gets a new peer and a fresh decision.
+  const frameRateCapsRef = useRef(new WeakMap<NativeSenderPeer, FrameRateCapState>());
   const routePolicyRef = useRef<RoutePolicy>(routePolicy);
   const advancedQualityRef = useRef<QualitySettings>(advancedQuality);
   const videoCodecModeRef = useRef<BrowserVideoCodecMode>(videoCodecMode);
@@ -1278,6 +1285,12 @@ export function HostPage({
         evidence,
       ),
     );
+    if (peer instanceof NativeSenderPeer) {
+      const previous = frameRateCapsRef.current.get(peer) ?? INITIAL_FRAME_RATE_CAP;
+      const next = nextFrameRateCap(previous, evidence.metrics, qualitySettingsRef.current.maxFramerate);
+      frameRateCapsRef.current.set(peer, next);
+      if (next.capped && !previous.capped) peer.capFrameRate();
+    }
   }
 
   function watchCaptureEnd(

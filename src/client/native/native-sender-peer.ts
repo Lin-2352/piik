@@ -29,6 +29,7 @@ export class NativeSenderPeer implements HostMediaPeer {
   readonly connectionId: string;
   private readonly edge: NativeSenderEdge;
   private disposed = false;
+  private frameRateCapped = false;
   private state: RTCPeerConnectionState = "new";
   private localCandidateType: string | null = null;
   private remoteCandidateType: string | null = null;
@@ -216,6 +217,13 @@ export class NativeSenderPeer implements HostMediaPeer {
     // A received native source is independent of its Browser preview stream.
     // A capture-backed Host source is replaced by its share-level owner.
     return Promise.resolve(this.source !== undefined);
+  }
+
+  /** Caps this viewer to half the frame rate for the rest of its connection. */
+  capFrameRate(): void {
+    if (this.disposed || this.frameRateCapped) return;
+    this.frameRateCapped = true;
+    void this.control.capEdgeFrameRate?.(this.shareId, this.connectionId, true).catch(() => undefined);
   }
 
   dispose(): void {

@@ -139,3 +139,26 @@ describe("native Host peer quality", () => {
     peer.dispose();
   });
 });
+
+describe("native Host peer frame-rate cap", () => {
+  it("asks the App once to send this viewer only the base temporal layer", async () => {
+    const capEdgeFrameRate = vi.fn(async () => undefined);
+    const control: NativeEdgeControl = {
+      updateShare: vi.fn(async () => undefined),
+      prepareEdge: vi.fn<NativeEdgeControl["prepareEdge"]>(async () => ({ type: "offer", sdp: "v=0\r\n" })),
+      acceptSignal: vi.fn(async () => undefined),
+      closeEdge: vi.fn(async () => undefined),
+      capEdgeFrameRate,
+      onEvent: vi.fn(() => () => undefined),
+    };
+    const peer = new NativeSenderPeer(
+      "viewer_123456", "edge_12345678", "share_1234567",
+      { iceServers: [], natPredictionStunUrls: [] }, false, control,
+      { sendSignal: () => true, onUpdate: () => undefined }, "h265",
+    );
+    peer.capFrameRate();
+    peer.capFrameRate();
+    expect(capEdgeFrameRate).toHaveBeenCalledTimes(1);
+    expect(capEdgeFrameRate).toHaveBeenCalledWith("share_1234567", "edge_12345678", true);
+  });
+});
