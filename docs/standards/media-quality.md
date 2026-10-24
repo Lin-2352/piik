@@ -173,6 +173,12 @@ about 0.075 bits per pixel per frame, H.265 above 0.04); below that the encoder
 may use any quantizer, because a pinned quantizer overshoots the bitrate ceiling,
 overflows the paced sender and starves the viewer of packets. The send-side
 probe driver runs at most once per 10 ms; it needs no per-packet call.
+Native Windows encoding runs on the NVIDIA GPU whenever the machine has one: the
+helper enumerates only NVIDIA adapters then (`PreferNvidia`), so an integrated GPU
+is never offered as an encoder or capture adapter. A machine without an NVIDIA GPU
+keeps every adapter. H.264, H.265 and AV1 encode in NVENC; VP8 is the CPU
+(libvpx) compatibility fallback, since NVENC has no VP8 encoder, and only its
+capture and conversion run on the GPU.
 Native H264 retains Constrained Baseline. Capture validates the coding-tool subset under
 RFC 6184, including equivalent Constrained Baseline constraint bytes, and reports
 the actual SPS profile/level; one vendor's byte spelling is not the contract.

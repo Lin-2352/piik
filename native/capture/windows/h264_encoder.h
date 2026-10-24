@@ -223,6 +223,10 @@ inline bool IsNewHardwareCodec(OutputKind kind) {
 }
 
 std::vector<Adapter> EnumerateAdapters();
+// Keeps only NVIDIA adapters when there is at least one, otherwise returns the
+// list unchanged: an integrated GPU is never an encoder or capture candidate
+// beside an NVIDIA GPU.
+std::vector<Adapter> PreferNvidia(std::vector<Adapter> adapters);
 const Adapter& SelectAdapter(const std::vector<Adapter>& adapters, UINT index);
 DeviceContext CreateDevice(const Adapter& adapter);
 ActivationList EnumerateHardwareEncoders(const Adapter& adapter,

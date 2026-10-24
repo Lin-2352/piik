@@ -262,6 +262,29 @@ void CheckTemporalLayers() {
   assert(TemporalLayerCount(OutputKind::av1, VideoProfile{2560, 1600, 120}) == 1);
 }
 
+// The App encodes on the NVIDIA GPU whenever there is one: an integrated or
+// other GPU is never offered as an encoder or capture adapter beside it.
+void CheckAdapterPreference() {
+  constexpr UINT kIntel = 0x8086, kNvidia = 0x10DE, kAmd = 0x1002;
+  const auto make = [](UINT index, UINT vendor) {
+    Adapter adapter;
+    adapter.index = index;
+    adapter.description.VendorId = vendor;
+    return adapter;
+  };
+  auto kept = PreferNvidia({make(0, kIntel), make(1, kNvidia)});
+  assert(kept.size() == 1 && kept[0].index == 1);
+  kept = PreferNvidia({make(0, kNvidia), make(1, kIntel)});
+  assert(kept.size() == 1 && kept[0].index == 0);
+  // Two NVIDIA GPUs both stay, with their own indices.
+  kept = PreferNvidia({make(0, kIntel), make(1, kNvidia), make(2, kNvidia)});
+  assert(kept.size() == 2 && kept[0].index == 1 && kept[1].index == 2);
+  // Without NVIDIA nothing is removed, so other machines keep working.
+  kept = PreferNvidia({make(0, kIntel), make(1, kAmd)});
+  assert(kept.size() == 2 && kept[0].index == 0 && kept[1].index == 1);
+  assert(PreferNvidia({}).empty());
+}
+
 void CheckEncoderCandidates() {
   const std::vector<EncoderCandidate> candidates{{0, 0}, {1, 0}, {1, 1}, {2, 0}};
   const EncoderCandidate preferred{1, 0};
@@ -401,6 +424,7 @@ void CheckSurfaceSample(ID3D11Device* device) {
 }
 
 int main() {
+  CheckAdapterPreference();
   CheckTemporalLayers();
   CheckH264TemporalInspection();
   CheckActiveWaitsForKeyFrame();

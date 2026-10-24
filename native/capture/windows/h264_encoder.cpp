@@ -83,6 +83,20 @@ std::vector<Adapter> EnumerateAdapters() {
       adapters.push_back(std::move(current));
     }
   }
+  return PreferNvidia(std::move(adapters));
+}
+
+std::vector<Adapter> PreferNvidia(std::vector<Adapter> adapters) {
+  constexpr UINT kNvidiaVendorId = 0x10DE;
+  const bool has_nvidia = std::any_of(
+      adapters.begin(), adapters.end(),
+      [](const Adapter& adapter) { return adapter.description.VendorId == kNvidiaVendorId; });
+  if (!has_nvidia) return adapters;
+  adapters.erase(std::remove_if(adapters.begin(), adapters.end(),
+                                [](const Adapter& adapter) {
+                                  return adapter.description.VendorId != kNvidiaVendorId;
+                                }),
+                 adapters.end());
   return adapters;
 }
 
