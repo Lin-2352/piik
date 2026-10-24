@@ -21,6 +21,7 @@ export const METRIC_PRESENTATION = {
   "stats.decodeMs": { icon: "clock", hint: "hint-metric-decode-time" },
   "stats.framesReceivedDecoded": { icon: "frames", hint: "hint-metric-dropped" },
   "stats.decoder": { icon: "cpu", hint: "hint-metric-decode-time" },
+  "stats.hardwareDecode": { icon: "cpu", hint: "hint-metric-decode-time" },
   "stats.keyFrames": { icon: "frames", hint: "hint-metric-freezes" },
   "stats.pli": { icon: "refresh", hint: "hint-metric-freezes" },
   "stats.nack": { icon: "packetLoss", hint: "hint-metric-loss" },

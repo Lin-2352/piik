@@ -427,6 +427,7 @@ export const zh = {
   "stats.jitter": "网络抖动",
   "stats.dropped": "本次采样丢帧",
   "stats.framesReceivedDecoded": "本次采样收到 / 解码帧",
+  "stats.hardwareDecode": "硬件解码",
   "stats.decoder": "解码器",
   "stats.keyFrames": "本次采样关键帧",
   "stats.pli": "本次采样画面刷新请求",

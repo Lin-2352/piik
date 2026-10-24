@@ -134,12 +134,12 @@ function secondaryMetrics(
       });
     }
     if (metrics.decoderImplementation) {
-      values.push({
-        label: "stats.decoder",
-        value: `${metrics.decoderImplementation}${
-          metrics.powerEfficientDecoder === true ? " · ✓" : metrics.powerEfficientDecoder === false ? " · ✗" : ""
-        }`,
-      });
+      values.push({ label: "stats.decoder", value: metrics.decoderImplementation });
+    }
+    // Remote viewers report only whether they decode in hardware, never the
+    // device-specific decoder name.
+    if (metrics.powerEfficientDecoder !== null) {
+      values.push({ label: "stats.hardwareDecode", value: metrics.powerEfficientDecoder ? "✓" : "✗" });
     }
     addNumber("stats.keyFrames", metrics.intervalKeyFramesDecoded, "", 0);
     addNumber("stats.pli", metrics.intervalPliCount, "", 0);

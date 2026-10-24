@@ -427,6 +427,7 @@ export const en: Record<CopyKey, string> = {
   "stats.jitter": "Jitter",
   "stats.dropped": "Dropped frames (interval)",
   "stats.framesReceivedDecoded": "Frames received / decoded (interval)",
+  "stats.hardwareDecode": "Hardware decode",
   "stats.decoder": "Decoder",
   "stats.keyFrames": "Key frames decoded (interval)",
   "stats.pli": "Picture refresh requests (interval)",
