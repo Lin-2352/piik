@@ -115,3 +115,97 @@ func TestForwardingPreservesVP8TemporalLayers(t *testing.T) {
 		})
 	}
 }
+
+// A viewer that cannot decode the full frame rate gets only H.265 base-layer
+// frames, with a sequence the receiver sees as gap-free (no false loss/NACKs).
+func TestCappedTransportForwardsOnlyH265BaseLayerWithoutGaps(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	check := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	codec := webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{
+		MimeType: webrtc.MimeTypeH265, ClockRate: 90_000,
+	}, PayloadType: 96}
+	source, err := NewSource(SourceOptions{ID: "screen", StreamID: "capped", Codec: codec,
+		Formats: []LayerFormat{{Width: 8, Height: 8, Bitrate: 300_000}}})
+	check(err)
+	defer source.Close()
+	check(source.BindLayer(0, 1000, webrtc.RTPParameters{Codecs: []webrtc.RTPCodecParameters{codec}}))
+	settings := webrtc.SettingEngine{}
+	settings.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
+	settings.SetIncludeLoopbackCandidate(true)
+	settings.SetIPFilter(func(ip net.IP) bool { return ip.IsLoopback() })
+	transport, err := NewTransport(TransportOptions{Source: source, Settings: settings, ConnectionID: "phone", InitialBitrate: 1_000_000})
+	check(err)
+	defer transport.Close()
+	transport.Output.CapTemporalLayer(0)
+	receiver, err := webrtc.NewAPI(webrtc.WithSettingEngine(settings)).NewPeerConnection(webrtc.Configuration{})
+	check(err)
+	defer receiver.Close()
+	var base, enhancement, gaps atomic.Uint32
+	receiver.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		last := -1
+		for {
+			packet, _, err := track.ReadRTP()
+			if err != nil {
+				return
+			}
+			if len(packet.Payload) < 2 {
+				continue
+			}
+			if last >= 0 && packet.SequenceNumber != uint16(last+1) {
+				gaps.Add(1)
+			}
+			last = int(packet.SequenceNumber)
+			if packet.Payload[1]&0x07 == 1 {
+				base.Add(1)
+			} else {
+				enhancement.Add(1)
+			}
+		}
+	})
+	offer, err := transport.PC.CreateOffer(nil)
+	check(err)
+	gather := webrtc.GatheringCompletePromise(transport.PC)
+	check(transport.PC.SetLocalDescription(offer))
+	<-gather
+	check(receiver.SetRemoteDescription(*transport.PC.LocalDescription()))
+	answer, err := receiver.CreateAnswer(nil)
+	check(err)
+	gather = webrtc.GatheringCompletePromise(receiver)
+	check(receiver.SetLocalDescription(answer))
+	<-gather
+	check(transport.PC.SetRemoteDescription(*receiver.LocalDescription()))
+	for transport.PC.ConnectionState() != webrtc.PeerConnectionStateConnected {
+		select {
+		case <-time.After(5 * time.Millisecond):
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	}
+	check(transport.SetConnected())
+	for frame := uint16(0); base.Load() < 12; frame++ {
+		// HEVC NAL header: type<<1, then nuh_temporal_id_plus1. Every eighth
+		// frame is an SPS (what LiveKit treats as an H.265 keyframe), so a late
+		// forwarder start can still lock on; odd frames are the enhancement
+		// temporal layer (TID 1).
+		header := []byte{1 << 1, 1 + byte(frame%2)}
+		if frame%8 == 0 {
+			header = []byte{33 << 1, 1}
+		}
+		check(source.WriteRTP(0, &rtp.Packet{Header: rtp.Header{Version: 2, Marker: true, PayloadType: 96,
+			SSRC: 1000, SequenceNumber: frame + 1, Timestamp: uint32(frame+1) * 750}, Payload: append(header, 0xaf, 0x01)}))
+		select {
+		case <-time.After(time.Second / 120):
+		case <-ctx.Done():
+			t.Fatalf("capped viewer stalled: base=%d enhancement=%d", base.Load(), enhancement.Load())
+		}
+	}
+	if enhancement.Load() != 0 || gaps.Load() != 0 {
+		t.Fatalf("capped viewer got %d enhancement packets and %d sequence gaps", enhancement.Load(), gaps.Load())
+	}
+}

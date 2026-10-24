@@ -28,6 +28,7 @@ type Output struct {
 	closed          bool
 	onActivity      func()
 	onDemandChanged func()
+	cap             temporalCap
 }
 
 // Snapshot is read by the parent at its input-frame boundary. Current means
@@ -227,6 +228,10 @@ func (output *Output) writeRTP(packet *buffer.ExtPacket, layer int32, receiver s
 	if closed {
 		return 0
 	}
+	packet, admitted := output.cap.admit(packet, layer)
+	if !admitted {
+		return 0
+	}
 	// DownTrack listeners may read State; never hold its mutex during callbacks.
 	written := output.DownTrack.WriteRTP(packet, layer)
 	if written > 0 && packet.Packet.Marker {
@@ -327,6 +332,7 @@ func (output *Output) replaceReceiver(receiver *outputReceiver) error {
 	// A different source has different RTP/NTP references even with the same
 	// logical layer SSRCs. Restart clears those references; Resync does not.
 	output.DownTrack.ReceiverRestart(output.Receiver())
+	output.cap.reset()
 	output.DownTrack.SetReceiver(receiver)
 	output.mu.Lock()
 	output.current = -1
