@@ -144,6 +144,7 @@ func NewTransport(options TransportOptions) (_ *Transport, err error) {
 	transport.pacer = newBoundedPacer(pacer.NewLeakyBucket(log, nil, 5*time.Millisecond, options.InitialBitrate),
 		log, options.Source.maxPackets)
 	transport.pacer.SetBitrate(options.InitialBitrate)
+	transport.pacer.trace = newDebugJoinTrace(options.ConnectionID)
 	transport.pacer.sender = pacer.NewBase(log, transport.estimator)
 	transport.pacer.SetPacerProbeObserverListener(transport)
 	track, err := sfu.NewDownTrack(sfu.DownTrackParams{
@@ -569,6 +570,8 @@ type boundedPacer struct {
 	bytes   atomic.Uint64
 	dropped atomic.Uint64
 	last    atomic.Int64
+	// trace is non-nil only with debug logging on (see join_trace.go).
+	trace *joinTrace
 	// Diagnostic lines are rate limited to one per second each.
 	overflowLogged, slowLogged atomic.Int64
 }
@@ -706,6 +709,13 @@ func (ticket *pacedPacket) WriteRTP(*rtp.Header, []byte) (int, error) {
 	queue.mu.Unlock()
 	if packet == nil {
 		return 0, io.ErrClosedPipe
+	}
+	if queue.trace != nil {
+		if packet.IsRTX {
+			queue.trace.observeRetransmit()
+		} else if packet.Header != nil {
+			queue.trace.observe(packet.Header, len(packet.Payload), packet.IsProbe, queue.pendingCount())
+		}
 	}
 	started := time.Now()
 	written, err := queue.sender.SendPacket(packet)
