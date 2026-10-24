@@ -633,6 +633,15 @@ export class NativeClient {
     );
   }
 
+  async capEdgeFrameRate(shareId: string, connectionId: string, capped: boolean): Promise<void> {
+    if (!this.health.nativeMedia.frameRateCap) return;
+    await this.request(
+      "cap-edge-frame-rate",
+      { shareId, connectionId, capped },
+      nativeAckResponseSchema,
+    );
+  }
+
   async microphones(): Promise<{ id: string; label: string }[]> {
     if (!this.health.nativeMedia.microphone) throw new Error("Piik App microphone is unavailable");
     return (await this.request("list-microphones", {}, microphoneListResponseSchema)).devices;

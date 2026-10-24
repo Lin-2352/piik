@@ -29,6 +29,7 @@ export class NativeSenderPeer implements HostMediaPeer {
   readonly connectionId: string;
   private readonly edge: NativeSenderEdge;
   private disposed = false;
+  private frameRateCapped = false;
   private state: RTCPeerConnectionState = "new";
   private localCandidateType: string | null = null;
   private remoteCandidateType: string | null = null;
@@ -44,6 +45,7 @@ export class NativeSenderPeer implements HostMediaPeer {
     events: NativeSenderPeerEvents,
     codec: NativeVideoCodec,
     private readonly source?: NativeSenderSource,
+    private readonly startCapped = false,
   ) {
     this.connectionId = connectionId;
     this.snapshot = {
@@ -149,7 +151,11 @@ export class NativeSenderPeer implements HostMediaPeer {
     if (this.disposed) return false;
     if (this.source && !(await this.updateProfile(this.source.getProfile()))) return false;
     if (this.disposed) return false;
-    return this.edge.start();
+    const started = await this.edge.start();
+    // The edge exists now and no media flows before the answer is accepted, so
+    // a viewer that must start capped never receives an uncapped frame.
+    if (started && this.startCapped) this.capFrameRate();
+    return started;
   }
 
   async acceptSignal(payload: SignalPayload): Promise<void> {
@@ -216,6 +222,13 @@ export class NativeSenderPeer implements HostMediaPeer {
     // A received native source is independent of its Browser preview stream.
     // A capture-backed Host source is replaced by its share-level owner.
     return Promise.resolve(this.source !== undefined);
+  }
+
+  /** Caps this viewer to half the frame rate for the rest of its connection. */
+  capFrameRate(): void {
+    if (this.disposed || this.frameRateCapped) return;
+    this.frameRateCapped = true;
+    void this.control.capEdgeFrameRate?.(this.shareId, this.connectionId, true).catch(() => undefined);
   }
 
   dispose(): void {

@@ -10,7 +10,9 @@ if (option && option !== "--dry-run") {
 }
 const { files } = readReleaseArtifacts(directory, version, revision);
 if (files.some((file) => file.size > 100_000_000)) throw new Error("Gitee's 100 MB attachment limit is exceeded");
-const repository = "TNTcraftHIM/Piik";
+// The Gitee mirror is optional and names the same owner/repository as the GitHub release.
+const repository = process.env.GITEE_REPOSITORY?.trim();
+if (!repository) throw new Error("Set GITEE_REPOSITORY (owner/repository) to mirror a release");
 const api = `https://gitee.com/api/v5/repos/${repository}`;
 const marker = `<!-- piik-source: ${revision} -->`;
 const token = process.env.GITEE_TOKEN?.trim();

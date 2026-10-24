@@ -2,11 +2,8 @@
 <h1 align="center">Piik</h1>
 <p align="center"><strong>Share the good stuff.</strong><br>Private screen sharing for you and up to 20 friends.</p>
 <p align="center">
-  <a href="https://piik.tv">Website</a> ·
-  <a href="https://github.com/TNTcraftHIM/Piik/releases">Download</a> ·
-  <a href="https://gitee.com/TNTcraftHIM/Piik/releases">Gitee mirror</a> ·
-  <a href="https://demo.piik.tv">Use online</a> ·
-  <a href="https://piik.tv/docs/?lang=en">Documentation</a>
+  <a href="./docs/guide/getting-started.md">Getting started</a> ·
+  <a href="./docs/operations/self-hosting.md">Self-hosting</a>
 </p>
 <p align="center">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-36564f?style=flat-square" alt="License: MIT"></a>
@@ -27,7 +24,7 @@ on your own server.
 
 </details>
 
-[Features](#features) · [Get started](#get-started) · [Self-hosting](#self-hosting) · [Contributing](#contributing)
+[Features](#features) · [Get started](#get-started) · [Windows standalone](#windows-standalone) · [Self-hosting](#self-hosting) · [Contributing](#contributing)
 
 ## Features
 
@@ -57,8 +54,7 @@ you can also create a room in the online version.
 
 | Start here | What you need to do |
 | --- | --- |
-| [Use Piik online](https://demo.piik.tv) | Share from a desktop browser, or choose Camera on a phone with browser camera support. |
-| [Download Piik App](https://piik.tv/#download) | Extract and open the App, choose **Public invite**, then **Open Piik** to create a temporary room. |
+| [Piik App](./cmd/piik-app/README.md) | Extract and open the App, choose **Public invite**, then **Open Piik** to create a temporary room. |
 | [Host your own site](./docs/operations/self-hosting.md) | Advanced: deploy Piik Server on a Linux x64 or ARM64 server with your own domain, then connect through Piik App or a browser. |
 
 <p align="center"><img src="./docs/assets/quickstart.svg" width="640" alt="Choose a screen, send an invitation, watch together."></p>
@@ -84,13 +80,41 @@ Download a ZIP beginning with **`piik-app`**. The filename also identifies the p
 | `linux-amd64` | Linux x64 |
 | `linux-arm64` | Linux ARM64 |
 
-[**Full setup guide →**](./docs/guide/getting-started.md) · [**Open online →**](https://demo.piik.tv)
+[**Full setup guide →**](./docs/guide/getting-started.md)
 
 Browser capture requires HTTPS or `localhost`. Windows App and desktop browser
 sharing are the primary tested paths. Physical-device coverage for the macOS and
-Linux apps is still limited; [test results and feedback are welcome](https://github.com/TNTcraftHIM/Piik/issues).
+Linux apps is still limited; test results and feedback are welcome.
 P2P-only modes, including the App's temporary public
-link and the online version, may not connect on restrictive networks.
+link, may not connect on restrictive networks.
+
+## Windows standalone
+
+`Piik.exe` is the whole Piik App in one portable file: the web interface, the
+native screen capture and encode helper, and the public-link tunnel. There is no
+installer.
+
+1. Download `Piik.exe` and `Piik-Guide.md` from the latest
+   [release](https://github.com/Lin-2352/piik/releases/latest) of this repository.
+2. Put them in a folder you can write to and run `Piik.exe`. Choose **Local room**
+   or **Public invite**, then **Start sharing**.
+3. Settings, presets and your last choices are saved in a `piik-data` folder next
+   to the exe, so the folder moves with you. Helper programs unpack once into a
+   `runtime` folder beside it.
+
+- **NVIDIA hardware encoding.** When the PC has an NVIDIA GPU, H.264, H.265 and
+  AV1 encode on its video encoder and only that GPU is used; a game running at
+  full GPU load does not stall the stream. VP8 is a CPU fallback.
+- **Per-viewer frame rate.** A phone that cannot decode a 100+ fps stream is held
+  at half the frame rate automatically, from its first frame, while a PC keeps
+  the full rate.
+- **Known limit.** A phone joining a full 2560-wide picture can freeze for about
+  two seconds at the start; a 1080p picture or 60 fps avoids it.
+
+[**Standalone guide →**](./standalone/Piik-Guide.md)
+
+To build it yourself on Windows: `pwsh scripts/build-standalone.ps1 -Version v1.10.0`
+(needs Go, Node and the helper binaries in `runtime/`; see the script header).
 
 ## Self-hosting
 

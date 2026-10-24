@@ -61,6 +61,9 @@ type Options struct {
 	LANAddress     string
 	Port           int
 	DisableBrowser bool
+	// UseWindow shows the page in Piik's own window (Windows, WebView2). It is
+	// opt-in: WebView2 cannot play H.265, which the browser can.
+	UseWindow      bool
 	Debug          bool
 	LogDir         string
 	CaptureProcess string
@@ -74,6 +77,7 @@ func Run(ctx context.Context, options Options) (returnedErr error) {
 	ctx, cancel := context.WithCancel(ctx)
 	options.Debug = options.Debug || debugEnabled(os.Getenv("PIIK_DEBUG"))
 	options.console = newConsole(cancel, options.DisableBrowser)
+	options.console.openURL = openTarget(options.UseWindow, cancel)
 	var recorder *diagnostics.Recorder
 	var restoreLogger func()
 	defer func() {
@@ -618,7 +622,7 @@ func discoverNativeMedia(ctx context.Context, configuredPath string) nativeRunti
 	capabilities, err := nativecapture.Discover(ctx, path)
 	if err != nil {
 		return nativeRuntime{captureProcess: path, discoveryErr: err,
-			capabilities: loopback.NativeMediaCapabilities{ReceiverReuse: true, HostSettings: true}}
+			capabilities: loopback.NativeMediaCapabilities{ReceiverReuse: true, HostSettings: true, FrameRateCap: true}}
 	}
 	summary := capabilities.Summary()
 	return nativeRuntime{
@@ -638,6 +642,7 @@ func discoverNativeMedia(ctx context.Context, configuredPath string) nativeRunti
 			HardwareAV1:           summary.HardwareAV1,
 			HardwareHEVC:          summary.HardwareHEVC,
 			HostSettings:          true,
+			FrameRateCap:          true,
 		},
 	}
 }

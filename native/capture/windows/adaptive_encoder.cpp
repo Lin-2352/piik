@@ -295,7 +295,9 @@ class HardwareEncoder final : public webrtc::VideoEncoder {
       const auto began = env_.clock().TimeInMilliseconds();
       const auto access_unit = encoder_->Encode(native->texture(), native->timestamp100ns(),
                                                 key_frame_pending_, native->deadline());
-      key_frame_pending_ = false;
+      // A request holds until a key frame actually comes out (an enhancement-layer
+      // slot defers it to the next base-layer frame).
+      key_frame_pending_ = key_frame_pending_ && !access_unit.key_frame;
       webrtc::EncodedImage image;
       image.SetEncodedData(webrtc::EncodedImageBuffer::Create(
           access_unit.bytes.data(), access_unit.bytes.size()));

@@ -105,7 +105,13 @@ const activeMediaRouteUpstreamSchema = z.discriminatedUnion("kind", [
 export const videoDecodeSupportSchema = z.enum(["hardware", "software", "supported", "none"]);
 export type VideoDecodeSupport = z.infer<typeof videoDecodeSupportSchema>;
 export const videoDecodeSchema = z
-  .object({ av1: videoDecodeSupportSchema, h265: videoDecodeSupportSchema })
+  .object({
+    av1: videoDecodeSupportSchema,
+    h265: videoDecodeSupportSchema,
+    // Present only for a mobile browser: the Host starts it at half the frame
+    // rate of a 100+ fps share instead of waiting for it to stall.
+    mobile: z.boolean().optional(),
+  })
   .strict();
 export type VideoDecode = z.infer<typeof videoDecodeSchema>;
 
@@ -693,6 +699,14 @@ export const viewerQualityEvidenceMetricsSchema = z
       .max(64)
       .regex(/^audio\/[A-Za-z0-9.+-]{1,32}$/i)
       .nullable(),
+    // Optional: they tell a network-bound Viewer from a decoder-bound one.
+    framesReceivedDelta: nullableEvidenceInteger(10_000).optional(),
+    keyFramesDecodedDelta: nullableEvidenceInteger(10_000).optional(),
+    pliCountDelta: nullableEvidenceInteger(100_000).optional(),
+    nackCountDelta: nullableEvidenceInteger(1_000_000).optional(),
+    // Hardware decode as a yes/no only: decoder names identify devices and stay
+    // on the Viewer (see the device-fingerprint wire sample).
+    powerEfficientDecoder: z.boolean().nullable().optional(),
   })
   .strict()
   .refine(

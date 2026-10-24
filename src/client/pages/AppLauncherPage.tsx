@@ -3,7 +3,6 @@ import { z } from "zod";
 
 import { BrandMark } from "../components/living/BrandMark";
 import { LoadingStatus } from "../components/living/WaitingStatus";
-import { AppReleaseNotice } from "../components/living/AppReleaseNotice";
 import { AppHeader } from "../components/living/Header";
 import { LauncherForm, type AppMode } from "../components/living/LauncherForm";
 import { Btn, Pill } from "../components/living/primitives";
@@ -12,10 +11,6 @@ import { consoleLanguage } from "../locales";
 import { currentThemePreference } from "../ui/theme";
 import { clientLaunchURL, type ClientLaunchPresentation } from "../lib/session";
 import { browserDebugEnabled } from "../lib/debug";
-import {
-  checkReleaseUpdate,
-  type ReleaseUpdateNotice,
-} from "../lib/release-update";
 
 const launcherStateSchema = z.object({
   site: z.string(),
@@ -44,7 +39,6 @@ export function AppLauncherPage() {
   const [appDebug, setAppDebug] = useState<boolean | undefined>();
   const [debug, setDebug] = useState(false);
   const [lan, setLan] = useState<z.infer<typeof launcherStateSchema>["lan"]>();
-  const [update, setUpdate] = useState<ReleaseUpdateNotice | null>(null);
   const [version, setVersion] = useState<string>();
 
   useEffect(() => {
@@ -64,14 +58,6 @@ export function AppLauncherPage() {
         setDebug(state.debug === true || browserDebugEnabled);
         setLan(state.lan);
         setLoading(false);
-        void checkReleaseUpdate({
-          version: state.version,
-          revision: state.revision,
-        }, { packageTarget: state.packageTarget })
-          .then((notice) => {
-            if (current && notice) setUpdate(notice);
-          })
-          .catch(() => undefined);
       })
       .catch(() => {
         if (!current) return;
@@ -166,9 +152,7 @@ export function AppLauncherPage() {
             onLocalAccessPasswordChange={setLocalAccessPassword}
             lan={lan && { ...lan, onChange: (selected) => setLan({ ...lan, selected }) }}
             onSubmit={launch}
-          >
-            {update && <AppReleaseNotice update={update} />}
-          </LauncherForm>
+          />
         )}
       </main>
     </div>

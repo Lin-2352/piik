@@ -64,7 +64,7 @@ update into a running Piik deployment.
 
 ## Container Registry
 
-The Server image uses `ghcr.io/tntcrafthim/piik`. The publishing job authenticates
+The Server image uses `ghcr.io/lin-2352/piik`. The publishing job authenticates
 with `GITHUB_TOKEN` and `packages: write`; no additional registry secret is needed.
 The image's source label links it to this repository. GitHub's
 [Container registry guide](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)

@@ -179,6 +179,110 @@ void CheckHevcInspection() {
   assert(!InspectHevc({0, 0, 0, 1, 0x40, 0x01}).picture);   // parameter sets alone
   assert(!InspectHevc({0, 0, 0, 1, 0xc0, 0x01}).annex_b);   // forbidden_zero_bit
   assert(!InspectHevc({0x12, 0x00}).annex_b);               // AV1 OBUs are not Annex B
+  // Temporal layers: NVENC's enhancement frame is AUD(35) + TSA_N(2), both TID 1.
+  assert(summary.temporal_id == 0 && delta.temporal_id == 0);
+  // nuh_temporal_id_plus1 is 1..7: zero is a malformed header, not temporal id -1.
+  assert(!InspectHevc({0, 0, 0, 1, 0x02, 0x00, 0xee}).annex_b);
+  const auto enhancement = InspectHevc({0, 0, 0, 1, 0x46, 0x02, 0x50, 0, 0, 0, 1, 0x04, 0x02, 0xee});
+  assert(enhancement.picture && !enhancement.irap && enhancement.temporal_id == 1);
+}
+
+// NVIDIA's H.264 temporal layers, as captured: a base key frame is AUD, SPS, PPS,
+// SVC prefix NAL 14 (temporal_id 0) and IDR; an enhancement frame is AUD, prefix
+// (temporal_id 1, nal_ref_idc 0) and a non-reference slice.
+std::vector<UINT8> base_key_unit() {
+  return {0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x67, 0x42, 0xc0, 0x34,
+          0, 0, 0, 1, 0x68, 0xce, 0, 0, 0, 1, 0x6e, 0xc0, 0x80, 0x07,
+          0, 0, 0, 1, 0x65, 0x88};
+}
+
+void CheckH264TemporalInspection() {
+  const auto base = InspectAnnexB(base_key_unit());
+  assert(base.annex_b && base.sps && base.pps && base.idr && base.temporal_id == 0);
+  const auto enhancement = InspectAnnexB({0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x0e, 0x40, 0x80, 0x27,
+                                          0, 0, 0, 1, 0x01, 0x9a});
+  assert(enhancement.annex_b && !enhancement.idr && enhancement.temporal_id == 1);
+  // Without a prefix NAL the stream is single-layer.
+  assert(InspectAnnexB({0, 0, 0, 1, 0x41, 0x9a}).temporal_id == 0);
+  // An encoder that layers without prefix NAL units still marks enhancement
+  // frames as non-reference slices (nal_ref_idc 0): nothing references them, so
+  // a key-frame request landing on one is deferred, not fatal.
+  assert(InspectAnnexB({0, 0, 0, 1, 0x01, 0x9a}).non_reference);
+  assert(InspectAnnexB({0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x01, 0x9a}).non_reference);
+  assert(!InspectAnnexB({0, 0, 0, 1, 0x41, 0x9a}).non_reference);            // reference slice
+  assert(!InspectAnnexB({0, 0, 0, 1, 0x65, 0x88}).non_reference);            // IDR
+  assert(!InspectAnnexB({0, 0, 0, 1, 0x67, 0x42, 0xc0, 0x34}).non_reference);  // no slice at all
+  assert(!InspectAnnexB({0, 0, 0, 1, 0x06, 0x05, 0, 0, 0, 1, 0x41, 0x9a}).non_reference);  // SEI is always nri 0
+  assert(!InspectAnnexB(base_key_unit()).non_reference);
+}
+
+// A reused encoder's first live frame can be an enhancement frame with no SPS;
+// only a key frame (which carries the profile) may announce an active capture.
+void CheckActiveWaitsForKeyFrame() {
+  assert(!ActivatesCapture(EncodedAccessUnit{1, false, {0, 0, 0, 1, 0x01, 0x9a}}));
+  assert(ActivatesCapture(EncodedAccessUnit{2, true, {0, 0, 0, 1, 0x65, 0x88}}));
+}
+
+// The quality floor (max quantizer) only applies where the bitrate budget is
+// generous enough that it cannot defeat the ceiling. Measured: H.264 at QP 30
+// needed 27-35 Mbps on complex 2560x1600@120 content, so pinning QP 30 under a
+// 15 Mbps ceiling made the encoder exceed it by 2x and overflow the sender.
+void CheckQuantizerFloorHonorsCeiling() {
+  constexpr UINT32 kUnbounded = VideoProfile::kQuantizerUnbounded;
+  constexpr UINT32 kFloor = VideoProfile::kMaxQuantizer;
+  // 15 Mbps over 2560x1600@120 is 0.031 bits/pixel: far below what QP 30 costs.
+  assert(MaxQuantizer(OutputKind::h264, VideoProfile{2560, 1600, 120, 15'000'000}) == kUnbounded);
+  assert(MaxQuantizer(OutputKind::h265, VideoProfile{2560, 1600, 120, 15'000'000}) == kUnbounded);
+  // The derived half-size copy at a quarter of the budget is the same density.
+  assert(MaxQuantizer(OutputKind::h264, VideoProfile{1280, 800, 120, 3'750'000}) == kUnbounded);
+  // A generous budget keeps the floor (the case it was measured for: 38 Mbps).
+  assert(MaxQuantizer(OutputKind::h264, VideoProfile{2560, 1600, 120, 40'000'000}) == kFloor);
+  assert(MaxQuantizer(OutputKind::h264, VideoProfile{1920, 1080, 60, 20'000'000}) == kFloor);
+  // HEVC is about twice as efficient at one quantizer, so its threshold is lower.
+  assert(MaxQuantizer(OutputKind::h265, VideoProfile{2560, 1600, 120, 25'000'000}) == kFloor);
+  assert(MaxQuantizer(OutputKind::h264, VideoProfile{2560, 1600, 120, 25'000'000}) == kUnbounded);
+  // AV1's scale is different and unmeasured: unchanged.
+  assert(MaxQuantizer(OutputKind::av1, VideoProfile{2560, 1600, 120, 15'000'000}) == kFloor);
+  // A live bitrate change moves the answer in both directions.
+  VideoProfile live{2560, 1600, 120, 40'000'000};
+  assert(MaxQuantizer(OutputKind::h264, live) == kFloor);
+  live.bit_rate = 12'000'000;
+  assert(MaxQuantizer(OutputKind::h264, live) == kUnbounded);
+}
+
+// Two temporal layers only where halving still leaves smooth motion (>= 50 fps)
+// and the viewer cap can read them (LiveKit parses the HEVC temporal id).
+void CheckTemporalLayers() {
+  assert(TemporalLayerCount(OutputKind::h265, VideoProfile{2560, 1600, 120}) == 2);
+  assert(TemporalLayerCount(OutputKind::h265, VideoProfile{2560, 1600, 100}) == 2);
+  assert(TemporalLayerCount(OutputKind::h265, VideoProfile{2560, 1600, 90}) == 1);
+  assert(TemporalLayerCount(OutputKind::h265, VideoProfile{2560, 1600, 60}) == 1);
+  assert(TemporalLayerCount(OutputKind::h264, VideoProfile{2560, 1600, 120}) == 2);
+  assert(TemporalLayerCount(OutputKind::h264, VideoProfile{2560, 1600, 90}) == 1);
+  assert(TemporalLayerCount(OutputKind::av1, VideoProfile{2560, 1600, 120}) == 1);
+}
+
+// The App encodes on the NVIDIA GPU whenever there is one: an integrated or
+// other GPU is never offered as an encoder or capture adapter beside it.
+void CheckAdapterPreference() {
+  constexpr UINT kIntel = 0x8086, kNvidia = 0x10DE, kAmd = 0x1002;
+  const auto make = [](UINT index, UINT vendor) {
+    Adapter adapter;
+    adapter.index = index;
+    adapter.description.VendorId = vendor;
+    return adapter;
+  };
+  auto kept = PreferNvidia({make(0, kIntel), make(1, kNvidia)});
+  assert(kept.size() == 1 && kept[0].index == 1);
+  kept = PreferNvidia({make(0, kNvidia), make(1, kIntel)});
+  assert(kept.size() == 1 && kept[0].index == 0);
+  // Two NVIDIA GPUs both stay, with their own indices.
+  kept = PreferNvidia({make(0, kIntel), make(1, kNvidia), make(2, kNvidia)});
+  assert(kept.size() == 2 && kept[0].index == 1 && kept[1].index == 2);
+  // Without NVIDIA nothing is removed, so other machines keep working.
+  kept = PreferNvidia({make(0, kIntel), make(1, kAmd)});
+  assert(kept.size() == 2 && kept[0].index == 0 && kept[1].index == 1);
+  assert(PreferNvidia({}).empty());
 }
 
 void CheckEncoderCandidates() {
@@ -320,6 +424,11 @@ void CheckSurfaceSample(ID3D11Device* device) {
 }
 
 int main() {
+  CheckAdapterPreference();
+  CheckTemporalLayers();
+  CheckH264TemporalInspection();
+  CheckActiveWaitsForKeyFrame();
+  CheckQuantizerFloorHonorsCeiling();
   VideoProfile profile{2560, 1440, 60, 12'000'000};
   ValidateVideoProfile(profile);
   assert(profile.h264_level() == 51 && profile.profile_level_id() == "42c033");

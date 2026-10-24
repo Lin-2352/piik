@@ -32,6 +32,7 @@ import { SharingSettings } from "../components/living/SharingSettings";
 import { SavedSettings } from "../components/living/SavedSettings";
 import {
   defaultHostSettings,
+  usableHostSettings,
   completeHostSettings,
   deletePreset,
   loadLocalHostSettings,
@@ -174,6 +175,12 @@ import {
   type ViewerQualityEvidencePresentation,
 } from "../media/viewer-quality-evidence";
 import { ViewerQualityEvidenceStore } from "../media/viewer-quality-evidence-store";
+import {
+  type FrameRateCapState,
+  INITIAL_FRAME_RATE_CAP,
+  nextFrameRateCap,
+  startsFrameRateCapped,
+} from "../media/frame-rate-cap";
 import type {
   ConnectionMetrics,
   PeerSnapshot,
@@ -201,6 +208,7 @@ import {
 } from "../webrtc/media-assignment";
 import {
   automaticVideoCodecPreference,
+  browserCanReceiveH265,
   manualVideoCodecPreference,
   type BrowserVideoCodec,
   type BrowserVideoCodecMode,
@@ -454,12 +462,13 @@ export function HostPage({
   const hostSettingsTouchedRef = useRef(false);
   // Known once the App's health is read; decides whether H.265 is the default.
   const hardwareHEVCRef = useRef(false);
+  const canReceiveH265Ref = useRef(browserCanReceiveH265());
   useEffect(() => {
     let current = true;
     const restore = (file: HostSettingsFile) => {
       if (!hostSettingsTouchedRef.current && activeGenerationRef.current === null) {
-        const defaults = defaultHostSettings(hardwareHEVCRef.current);
-        if (file.last) applyHostSettings(completeHostSettings(file.last, defaults), true);
+        const defaults = defaultHostSettings(hardwareHEVCRef.current && canReceiveH265Ref.current);
+        if (file.last) applyHostSettings(usableHostSettings(completeHostSettings(file.last, defaults), canReceiveH265Ref.current), true);
         else if (defaults.codec !== videoCodecModeRef.current) changeVideoCodecMode(defaults.codec);
       }
     };
@@ -698,6 +707,18 @@ export function HostPage({
   const qualityChangeRef = useRef<object | null>(null);
   const pendingQualityChangeRef = useRef<QualitySettings | null>(null);
   const qualitySettingsRef = useRef<QualitySettings>(DEFAULT_QUALITY_SETTINGS);
+  // Per native viewer peer; a reconnect gets a new peer and a fresh decision.
+  const frameRateCapsRef = useRef(new WeakMap<NativeSenderPeer, FrameRateCapState>());
+  // Viewers that said they are a mobile browser: capped from the first frame of
+  // a 100+ fps share instead of after several stalled evidence windows.
+  const mobileViewerPeersRef = useRef(new Set<string>());
+  // The Host's native edge for this viewer starts capped when it must.
+  const startsCappedFor = (viewerPeerId: string): boolean =>
+    startsFrameRateCapped(mobileViewerPeersRef.current.has(viewerPeerId), qualitySettingsRef.current.maxFramerate);
+  const rememberStartedCapped = (peer: NativeSenderPeer, cappedAtStart: boolean): NativeSenderPeer => {
+    if (cappedAtStart) frameRateCapsRef.current.set(peer, { behind: 0, capped: true });
+    return peer;
+  };
   const routePolicyRef = useRef<RoutePolicy>(routePolicy);
   const advancedQualityRef = useRef<QualitySettings>(advancedQuality);
   const videoCodecModeRef = useRef<BrowserVideoCodecMode>(videoCodecMode);
@@ -1275,6 +1296,17 @@ export function HostPage({
         evidence,
       ),
     );
+    // Only a viewer fed by this Host's own edge says anything about that edge.
+    if (evidenceSource === "direct" && peer instanceof NativeSenderPeer) {
+      const previous = frameRateCapsRef.current.get(peer) ?? INITIAL_FRAME_RATE_CAP;
+      const next = nextFrameRateCap(
+        previous,
+        { ...evidence.metrics, windowMs: evidence.windowMs },
+        qualitySettingsRef.current.maxFramerate,
+      );
+      frameRateCapsRef.current.set(peer, next);
+      if (next.capped && !previous.capped) peer.capFrameRate();
+    }
   }
 
   function watchCaptureEnd(
@@ -1748,7 +1780,7 @@ export function HostPage({
   function applyHostSettings(settings: HostSettings, restoring = false): void {
     if (!restoring) hostSettingsTouchedRef.current = true;
     void changeQuality(settings.quality);
-    changeVideoCodecMode(settings.codec);
+    changeVideoCodecMode(usableHostSettings(settings, canReceiveH265Ref.current).codec);
     changeRoutePolicy({
       topologyOptimization: settings.topologyOptimization && !sfuOnly,
       natPrediction: settings.natPrediction && natPredictionAvailable && !sfuOnly,
@@ -2157,7 +2189,8 @@ export function HostPage({
                   input.natPredictionEnabled,
                 );
               }
-              return new NativeSenderPeer(
+              const cappedAtStart = startsCappedFor(candidate.childPeerId);
+              return rememberStartedCapped(new NativeSenderPeer(
                 candidate.childPeerId,
                 candidate.connectionId,
                 nativeShareGeneration,
@@ -2167,7 +2200,8 @@ export function HostPage({
                 events,
                 videoCodecRef.current.primary,
                 nativeMediaIngressRef.current?.source,
-              );
+                cappedAtStart,
+              ), cappedAtStart);
             }
           : undefined,
     });
@@ -2254,8 +2288,9 @@ export function HostPage({
         acceptHostPeerUpdate(peer, snapshot, generation);
       },
     };
+    const cappedAtStart = useNative && startsCappedFor(peerId);
     peer = useNative
-      ? new NativeSenderPeer(
+      ? rememberStartedCapped(new NativeSenderPeer(
           peerId,
           createOpaqueId(),
           nativeShareGeneration!,
@@ -2265,7 +2300,8 @@ export function HostPage({
           peerEvents,
           videoCodecRef.current.primary,
           nativeMediaIngressRef.current?.source,
-        )
+          cappedAtStart,
+        ), cappedAtStart)
       : new HostPeer(
           peerId,
           iceConfig,
@@ -2735,6 +2771,10 @@ export function HostPage({
             return;
           }
           if (message.type === "viewer-presence") {
+            mobileViewerPeersRef.current = new Set(
+              message.viewers.flatMap((viewer) =>
+                viewer.role === "viewer" && viewer.videoDecode?.mobile === true ? [viewer.peerId] : []),
+            );
             retainViewerQualityEvidenceForPresence(message.viewers);
             setParticipantPresence(message.viewers);
             return;
@@ -3907,7 +3947,7 @@ export function HostPage({
                 }}
                 onSave={name => setHostSettingsFile(file => savePreset(file, name, currentHostSettings()))}
                 onDelete={name => setHostSettingsFile(file => deletePreset(file, name))}
-                onReset={() => applyHostSettings(defaultHostSettings(hardwareHEVCRef.current))} />
+                onReset={() => applyHostSettings(defaultHostSettings(hardwareHEVCRef.current && canReceiveH265Ref.current))} />
             }
             presets={
               <QualityPresets selected={selectedQualityProfileId} busy={changingQuality}
@@ -4228,7 +4268,7 @@ export function HostPage({
                   role="group"
                   aria-label={t("host.advanced.codec")}
                 >
-                  {(["vp8", "auto", "h264", "h265", "av1"] as const).map((mode) => (
+                  {(["vp8", "auto", "h264", "h265", "av1"] as const).filter((mode) => mode !== "h265" || canReceiveH265Ref.current).map((mode) => (
                     <Chip
                       key={mode}
                       selected={displayedVideoCodecMode === mode}

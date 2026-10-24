@@ -826,8 +826,9 @@ func (v *RouteDiagnosticSnapshot) UnmarshalJSON(data []byte) error {
 // VideoDecode mirrors videoDecodeSchema: how a Viewer decodes the codecs that
 // browsers do not all play.
 type VideoDecode struct {
-	AV1  string `json:"av1"`
-	H265 string `json:"h265"`
+	AV1    string `json:"av1"`
+	H265   string `json:"h265"`
+	Mobile bool   `json:"mobile,omitempty"`
 }
 
 func validVideoDecodeSupport(value string) bool {
@@ -979,6 +980,12 @@ type ViewerQualityEvidenceMetrics struct {
 	AudioConcealedSamplesPercent *Num    `json:"audioConcealedSamplesPercent"`
 	AudioConcealmentEventsDelta  *Int    `json:"audioConcealmentEventsDelta"`
 	AudioCodec                   *string `json:"audioCodec"`
+	// Optional receive counters: network-bound versus decoder-bound Viewers.
+	FramesReceivedDelta   *Int  `json:"framesReceivedDelta,omitempty"`
+	KeyFramesDecodedDelta *Int  `json:"keyFramesDecodedDelta,omitempty"`
+	PliCountDelta         *Int  `json:"pliCountDelta,omitempty"`
+	NackCountDelta        *Int  `json:"nackCountDelta,omitempty"`
+	PowerEfficientDecoder *bool `json:"powerEfficientDecoder,omitempty"`
 }
 
 var viewerQualityEvidenceMetricKeys = []string{
@@ -1006,6 +1013,18 @@ func (v *ViewerQualityEvidenceMetrics) UnmarshalJSON(data []byte) error {
 	}
 	if err := present.require("natTraversalPath"); err != nil {
 		return err
+	}
+	// The receive counters are nullable and optional, like the TS schema.
+	for _, bound := range []struct {
+		value   *Int
+		maximum int64
+	}{
+		{v.FramesReceivedDelta, 10_000}, {v.KeyFramesDecodedDelta, 10_000},
+		{v.PliCountDelta, 100_000}, {v.NackCountDelta, 1_000_000},
+	} {
+		if bound.value != nil && !inRangeInt(*bound.value, 0, bound.maximum) {
+			return errors.New("viewer quality evidence integer is out of range")
+		}
 	}
 	if !enumOf(v.NatTraversalPath, NatTraversalPaths[:]...) {
 		return fmt.Errorf("unknown natTraversalPath %q", v.NatTraversalPath)

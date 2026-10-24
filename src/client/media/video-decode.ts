@@ -5,7 +5,7 @@ import type {
 
 // Browsers decode H264 and VP8 everywhere WebRTC exists. AV1 and H265 depend
 // on the browser and, for smooth playback at screen sizes, on hardware decode.
-export type OptionalVideoCodec = keyof VideoDecode;
+export type OptionalVideoCodec = "av1" | "h265";
 
 const OPTIONAL_CODEC_MIME_TYPES: Record<OptionalVideoCodec, string> = {
   av1: "video/av1",
@@ -36,12 +36,22 @@ async function decodeSupport(
         framerate: 60,
       },
     });
-    if (!info.supported) return "supported";
+    // The browser says it cannot decode this codec; the Host must know.
+    if (!info.supported) return "none";
     return info.powerEfficient ? "hardware" : "software";
   } catch {
     // The receiver lists the codec; this browser cannot say how it decodes.
     return "supported";
   }
+}
+
+/** A phone or tablet browser, by client hint, else by the user agent. */
+function isMobileBrowser(): boolean {
+  const nav = typeof navigator === "undefined"
+    ? undefined
+    : (navigator as Navigator & { userAgentData?: { mobile?: boolean } });
+  if (typeof nav?.userAgentData?.mobile === "boolean") return nav.userAgentData.mobile;
+  return /Mobi|Android|iPhone|iPad|iPod/i.test(nav?.userAgent ?? "");
 }
 
 let probed: VideoDecode | undefined;
@@ -53,6 +63,7 @@ export const videoDecodeProbe: Promise<VideoDecode | undefined> = (async () => {
     probed = {
       av1: await decodeSupport(OPTIONAL_CODEC_MIME_TYPES.av1, receivable),
       h265: await decodeSupport(OPTIONAL_CODEC_MIME_TYPES.h265, receivable),
+      ...(isMobileBrowser() ? { mobile: true } : {}),
     };
     return probed;
   } catch {
@@ -62,6 +73,22 @@ export const videoDecodeProbe: Promise<VideoDecode | undefined> = (async () => {
 
 export function currentVideoDecode(): VideoDecode | undefined {
   return probed;
+}
+
+/**
+ * The probe result, waiting at most timeoutMs for it. The Viewer reports its
+ * decode support (and whether it is a mobile browser) in its first message, so
+ * it waits briefly instead of authenticating before the probe has finished; a
+ * slow probe never blocks joining.
+ */
+export function settledVideoDecode(timeoutMs: number): Promise<VideoDecode | undefined> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(undefined), timeoutMs);
+    void videoDecodeProbe.then((result) => {
+      clearTimeout(timer);
+      resolve(result);
+    });
+  });
 }
 
 /**

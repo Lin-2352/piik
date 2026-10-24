@@ -31,7 +31,7 @@ after adapting the domain and certificate paths.
 ## Container
 
 Use the [Docker Compose setup](./self-hosting.md#docker-compose) for installation.
-The image is `ghcr.io/tntcrafthim/piik`, with `latest` and matching product version
+The image is `ghcr.io/lin-2352/piik`, with `latest` and matching product version
 tags (`vMAJOR.MINOR.PATCH`). Docker selects **linux/amd64** or **linux/arm64**
 to match the host. Set `PIIK_IMAGE` in `.env`
 to pin a version or image digest. Updates are explicit; pulling an image does not

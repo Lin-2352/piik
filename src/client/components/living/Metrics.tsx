@@ -127,6 +127,23 @@ function secondaryMetrics(
   } else {
     addNumber("stats.jitter", metrics.jitterMs, "ms", 1);
     addNumber("stats.dropped", metrics.intervalFramesDropped, "", 0);
+    if (metrics.intervalFramesReceived !== null && metrics.intervalFramesDecoded !== null) {
+      values.push({
+        label: "stats.framesReceivedDecoded",
+        value: `${metrics.intervalFramesReceived} / ${metrics.intervalFramesDecoded}`,
+      });
+    }
+    if (metrics.decoderImplementation) {
+      values.push({ label: "stats.decoder", value: metrics.decoderImplementation });
+    }
+    // Remote viewers report only whether they decode in hardware, never the
+    // device-specific decoder name.
+    if (metrics.powerEfficientDecoder !== null) {
+      values.push({ label: "stats.hardwareDecode", value: metrics.powerEfficientDecoder ? "✓" : "✗" });
+    }
+    addNumber("stats.keyFrames", metrics.intervalKeyFramesDecoded, "", 0);
+    addNumber("stats.pli", metrics.intervalPliCount, "", 0);
+    addNumber("stats.nack", metrics.intervalNackCount, "", 0);
     addNumber("stats.decodeMs", metrics.intervalDecodeMs, "ms", 1);
     addNumber("stats.freezeCount", metrics.intervalFreezeCount, "", 0);
     addNumber("stats.freezeDuration", metrics.intervalFreezeDurationMs, "ms", 1);

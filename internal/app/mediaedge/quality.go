@@ -76,7 +76,7 @@ func (edge *Edge) QualitySample(now time.Time) (QualitySample, bool) {
 				"rtcPeerId", diagnostics.ID(edge.connection.ID()), "windowMs", sample.SampleWindowMs,
 				"fps", sample.FramesPerSecond, "bitrateKbps", sample.BitrateKbps, "width", sample.Width, "height", sample.Height,
 				"availableOutgoingKbps", sample.AvailableOutgoingKbps, "state", sample.State, "reason", sample.Reason,
-				"egress", edge.transport.Egress(), "output", edge.transport.Output.State())
+				"egress", edge.transport.Egress(), "output", edge.transport.Output.State(), "iceRttMs", edge.iceRTTMs())
 		}()
 	}
 	target, observed := edge.targetBitrate()

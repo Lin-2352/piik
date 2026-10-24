@@ -71,6 +71,62 @@ describe("viewer video decode", () => {
   });
 });
 
+describe("viewer mobile flag", () => {
+  const probeWith = async (nav: Record<string, unknown>) => {
+    stubReceiver(["video/H264", "video/H265"]);
+    vi.stubGlobal("navigator", {
+      mediaCapabilities: { decodingInfo: vi.fn(async () => ({ supported: true, smooth: true, powerEfficient: true })) },
+      ...nav,
+    });
+    const { videoDecodeProbe } = await load();
+    return videoDecodeProbe;
+  };
+
+  it("reports a mobile browser from the client hint", async () => {
+    await expect(probeWith({ userAgentData: { mobile: true } })).resolves.toMatchObject({ mobile: true });
+  });
+
+  it("falls back to the user agent when there is no client hint", async () => {
+    await expect(probeWith({ userAgent: "Mozilla/5.0 (Linux; Android 14; RMX3561) AppleWebKit/537.36 Chrome/155.0 Mobile Safari/537.36" }))
+      .resolves.toMatchObject({ mobile: true });
+  });
+
+  it("omits the flag for a desktop browser", async () => {
+    const hinted = await probeWith({ userAgentData: { mobile: false } });
+    const plain = await probeWith({ userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/155.0 Safari/537.36" });
+    expect(hinted).not.toHaveProperty("mobile");
+    expect(plain).not.toHaveProperty("mobile");
+  });
+});
+
+describe("waiting for the decode probe before authenticating", () => {
+  it("returns the probe result as soon as it settles", async () => {
+    stubReceiver(["video/H264", "video/H265"]);
+    vi.stubGlobal("navigator", {
+      userAgentData: { mobile: true },
+      mediaCapabilities: { decodingInfo: vi.fn(async () => ({ supported: true, smooth: true, powerEfficient: true })) },
+    });
+    const { settledVideoDecode } = await load();
+    await expect(settledVideoDecode(1_000)).resolves.toMatchObject({ h265: "hardware", mobile: true });
+  });
+
+  it("gives up after the timeout so a slow probe never blocks joining", async () => {
+    vi.useFakeTimers();
+    try {
+      stubReceiver(["video/H264", "video/H265"]);
+      vi.stubGlobal("navigator", {
+        mediaCapabilities: { decodingInfo: vi.fn(() => new Promise(() => undefined)) },
+      });
+      const { settledVideoDecode } = await load();
+      const pending = settledVideoDecode(800);
+      await vi.advanceTimersByTimeAsync(800);
+      await expect(pending).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("host viewer decode status", () => {
   const ready = { mediaReady: true as const, upstream: { kind: "sfu" as const } };
 

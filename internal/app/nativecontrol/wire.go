@@ -201,6 +201,17 @@ type edgeCandidateRequest struct {
 	Candidate    *webrtc.ICECandidateInit `json:"candidate"`
 }
 
+// capEdgeFrameRateRequest limits one viewer to the base temporal layer (half
+// the share's frame rate) when it cannot decode the full rate.
+type capEdgeFrameRateRequest struct {
+	Version      int    `json:"version"`
+	ID           string `json:"id"`
+	Type         string `json:"type"`
+	ShareID      string `json:"shareId"`
+	ConnectionID string `json:"connectionId"`
+	Capped       *bool  `json:"capped"`
+}
+
 type closeEdgeRequest struct {
 	Version      int    `json:"version"`
 	ID           string `json:"id"`

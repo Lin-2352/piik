@@ -1615,6 +1615,13 @@ void WriteVideoStarting(ProtocolWriter& writer, const ProductArguments& argument
   Check(writer.WriteStatus(status.str()), "capture-status-starting");
 }
 
+// With temporal layers a reused encoder's first live frame can be an
+// enhancement frame without parameter sets; the capture becomes active (and
+// reports its profile) on the first key frame.
+bool ActivatesCapture(const EncodedAccessUnit& output) {
+  return output.key_frame;
+}
+
 void WriteVideoActive(ProtocolWriter& writer, const ProductArguments& arguments,
                       OutputKind kind, const EncodedAccessUnit& output) {
   std::ostringstream status;
@@ -1781,7 +1788,7 @@ void RunEncodedVideo(ProductArguments arguments) {
   std::atomic<size_t> failed{0};
   auto workers = CreateOutputWorkers(arguments, adapter, device, writer, std::move(encoder),
       [&](const EncodedAccessUnit& output) {
-        if (!active.exchange(true)) WriteVideoActive(writer, arguments, kind, output);
+        if (ActivatesCapture(output) && !active.exchange(true)) WriteVideoActive(writer, arguments, kind, output);
       },
       [&](size_t layer, std::exception_ptr error) {
         (void)writer.WriteUnavailable(static_cast<UINT8>(layer), OutputFailureDetail(layer, error));
@@ -1987,7 +1994,7 @@ void RunVideoCapture(ProductArguments arguments) {
     WriteVideoStarting(writer, arguments, adapter, encoder);
     workers = CreateOutputWorkers(arguments, adapter, device, writer, std::move(encoder),
       [&](const EncodedAccessUnit& output) {
-        if (!active_status_written.exchange(true)) WriteVideoActive(writer, arguments, kind, output);
+        if (ActivatesCapture(output) && !active_status_written.exchange(true)) WriteVideoActive(writer, arguments, kind, output);
       },
       [&](size_t layer, std::exception_ptr error) {
         if (layer == (arguments.outputs.size() > 1 ? 1u : 0u)) {

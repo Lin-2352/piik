@@ -54,6 +54,66 @@ type Source struct {
 	// topFloorDivisor sets how far that layer may follow a budget down: it stays
 	// eligible while divisor*budget >= ceiling. 0 means the default of 2.
 	topFloorDivisor atomic.Int64
+	// frameTemporal records the temporal layer of recent encoded frames whose
+	// codec does not carry it where LiveKit reads it (H.264), by layer and RTP
+	// timestamp. Written before the frame's packets are enqueued.
+	temporalMu    sync.RWMutex
+	frameTemporal map[int32]*temporalHistory
+}
+
+// Enough recent frames to outlast any forwarding delay (8 s at 120 fps).
+const temporalFrames = 1024
+
+// temporalHistory remembers the last temporalFrames frames by exact timestamp,
+// evicting the oldest. Frame timestamps are multiples of the frame duration, so
+// a modulo-indexed ring would use half its slots and collide.
+type temporalHistory struct {
+	layers map[uint32]int32
+	order  [temporalFrames]uint32
+	next   int
+	count  int
+}
+
+func (history *temporalHistory) record(timestamp uint32, temporal int32) {
+	if history.layers == nil {
+		history.layers = make(map[uint32]int32, temporalFrames)
+	}
+	if _, known := history.layers[timestamp]; !known {
+		if history.count == temporalFrames {
+			delete(history.layers, history.order[history.next])
+		} else {
+			history.count++
+		}
+		history.order[history.next] = timestamp
+		history.next = (history.next + 1) % temporalFrames
+	}
+	history.layers[timestamp] = temporal
+}
+
+func (source *Source) recordFrameTemporal(layer int32, timestamp uint32, temporal int32) {
+	source.temporalMu.Lock()
+	defer source.temporalMu.Unlock()
+	if source.frameTemporal == nil {
+		source.frameTemporal = make(map[int32]*temporalHistory)
+	}
+	history := source.frameTemporal[layer]
+	if history == nil {
+		history = new(temporalHistory)
+		source.frameTemporal[layer] = history
+	}
+	history.record(timestamp, temporal)
+}
+
+// FrameTemporal reports the recorded temporal layer of the frame at timestamp.
+func (source *Source) FrameTemporal(layer int32, timestamp uint32) (int32, bool) {
+	source.temporalMu.RLock()
+	defer source.temporalMu.RUnlock()
+	history := source.frameTemporal[layer]
+	if history == nil {
+		return 0, false
+	}
+	temporal, known := history.layers[timestamp]
+	return temporal, known
 }
 
 func (source *Source) SetTopLayerFloorDivisor(divisor int64) {

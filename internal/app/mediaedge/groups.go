@@ -286,7 +286,9 @@ func (source *Source) planGroups(demands []outputDemand) (OutputPlan, error) {
 		follow := top
 		divisor := uint64(max(2, source.floorDivisor))
 		for _, demand := range demands {
-			if demand.active && !demand.lower && demand.full < follow && divisor*uint64(demand.full) >= uint64(top) {
+			// A viewer on the derived copy still bounds the full-size encoder:
+			// raising it to the ceiling then would keep that viewer from returning.
+			if demand.active && demand.full < follow && divisor*uint64(demand.full) >= uint64(top) {
 				follow = demand.full
 			}
 		}

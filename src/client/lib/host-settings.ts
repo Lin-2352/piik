@@ -90,6 +90,11 @@ export function defaultHostSettings(hardwareHEVC: boolean): HostSettings {
   return hardwareHEVC ? { ...DEFAULT_HOST_SETTINGS, codec: "h265" } : DEFAULT_HOST_SETTINGS;
 }
 
+/** A remembered H.265 choice this page cannot decode falls back to automatic selection. */
+export function usableHostSettings(settings: HostSettings, canReceiveH265: boolean): HostSettings {
+  return settings.codec === "h265" && !canReceiveH265 ? { ...settings, codec: "auto" } : settings;
+}
+
 /** Fills every missing field from the defaults. */
 export function completeHostSettings(
   settings: Partial<HostSettings>,

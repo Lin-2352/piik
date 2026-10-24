@@ -119,7 +119,7 @@ import {
   type ViewerRelayPeerFactory,
 } from "../webrtc/viewer-relay";
 import { NativeClient } from "../native/client";
-import { currentVideoDecode, onUnplayableCodec, type OptionalVideoCodec } from "../media/video-decode";
+import { currentVideoDecode, onUnplayableCodec, settledVideoDecode, type OptionalVideoCodec } from "../media/video-decode";
 import {
   NativeCapableViewerPeer,
 } from "../native/native-viewer-peer";
@@ -575,7 +575,10 @@ export function ViewerPage({
         displayName: displayNameRef.current,
         viewerPresence: true,
         ...(connectionAttemptProgress4 ? { connectionAttemptProgress4: true } : {}),
-        ...(currentVideoDecode() ? { videoDecode: currentVideoDecode() } : {}),
+        // Read when the message is sent (also on reconnect), after the probe has settled.
+        get videoDecode() {
+          return currentVideoDecode();
+        },
       },
       {
         onStatus: (status) => {
@@ -1833,7 +1836,10 @@ export function ViewerPage({
       }
     }
 
-    signal.start();
+    // The first message carries the decode probe (and the mobile flag): wait for it, bounded.
+    void settledVideoDecode(1_000).then(() => {
+      if (active) signal.start();
+    });
     return () => {
       active = false;
       document.removeEventListener("freeze", suspendForPageLifecycle);

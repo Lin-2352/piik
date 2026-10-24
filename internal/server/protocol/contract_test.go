@@ -349,6 +349,18 @@ func TestViewerPresenceConstructors(t *testing.T) {
 	if err := decoded.UnmarshalJSON(encoded); err != nil || decoded.VideoDecode == nil || decoded.VideoDecode.H265 != "none" {
 		t.Fatalf("viewer videoDecode did not round-trip: %+v, %v", decoded, err)
 	}
+	if decoded.VideoDecode.Mobile || bytes.Contains(encoded, []byte("mobile")) {
+		t.Fatalf("mobile must be omitted unless set: %s", encoded)
+	}
+	encoded, err = marshalJSON(NewViewerPresenceEntry(
+		"viewer_12345678", "小明", SfuUpstream(), true, &VideoDecode{AV1: "software", H265: "none", Mobile: true}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := decoded.UnmarshalJSON(encoded); err != nil || decoded.VideoDecode == nil || !decoded.VideoDecode.Mobile ||
+		!bytes.Contains(encoded, []byte(`"mobile":true`)) {
+		t.Fatalf("mobile did not round-trip: %s, %v", encoded, err)
+	}
 	for _, invalid := range []string{
 		`{"role":"viewer","peerId":"viewer_12345678","displayName":"a","upstream":{"kind":"sfu"},"videoDecode":{"av1":"fast","h265":"none"}}`,
 		`{"role":"viewer","peerId":"viewer_12345678","displayName":"a","upstream":{"kind":"sfu"},"videoDecode":{"av1":"none"}}`,
@@ -776,5 +788,26 @@ func TestQualitySettingsBitrateModeIsOptionalAndValidated(t *testing.T) {
 	var settings QualitySettings
 	if err := json.Unmarshal([]byte(base+`,"bitrateMode":"turbo"}`), &settings); err == nil {
 		t.Fatal("an unknown bitrate mode must be rejected")
+	}
+}
+
+func TestViewerEvidenceAcceptsOptionalReceiveCounters(t *testing.T) {
+	base := `{"natTraversalPath":"ordinary","width":1920,"height":1080,"framesPerSecond":60,"bitrateKbps":7500,"packetsReceivedDelta":1500,"packetsLostDelta":0,"rttMs":18,"jitterMs":3,"framesDecodedDelta":120,"framesDroppedDelta":0,"decodeMsPerFrame":2,"freezeCountDelta":0,"freezeDurationMsDelta":0,"pauseCountDelta":0,"pauseDurationMsDelta":0,"codec":"video/H264","codecProfile":null,"codecParameters":null,"audioBitrateKbps":192,"audioPacketLossPercent":0,"audioJitterMs":2,"audioVideoPlayoutDeltaMs":0,"videoJitterBufferDelayMs":20,"audioJitterBufferDelayMs":20,"audioConcealedSamplesPercent":0,"audioConcealmentEventsDelta":0,"audioCodec":"audio/opus"`
+	for _, extra := range []string{
+		``,
+		`,"framesReceivedDelta":120,"keyFramesDecodedDelta":1,"pliCountDelta":2,"nackCountDelta":3,"powerEfficientDecoder":true`,
+		`,"framesReceivedDelta":null,"powerEfficientDecoder":null`,
+	} {
+		var metrics ViewerQualityEvidenceMetrics
+		if err := json.Unmarshal([]byte(base+extra+"}"), &metrics); err != nil {
+			t.Fatalf("%q: %v", extra, err)
+		}
+	}
+	var metrics ViewerQualityEvidenceMetrics
+	if err := json.Unmarshal([]byte(base+`,"pliCountDelta":-1}`), &metrics); err == nil {
+		t.Fatal("a negative counter must be rejected")
+	}
+	if err := json.Unmarshal([]byte(base+`,"decoderImplementation":"device-specific-decoder"}`), &metrics); err == nil {
+		t.Fatal("a decoder name identifies the device and must be rejected")
 	}
 }

@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-10-06
+Last updated: 2026-10-25
 
 This is the compact execution/deployment index. Product modules own behavior,
 [verification status](./verification-status.md) owns unresolved physical limits,
@@ -30,6 +30,13 @@ and Git/PRs own completed history.
   selection and sharing settings keep their current resource owners. The
   [capture assessment](./research/camera-and-microphone.md) owns platform behavior
   and the remaining physical evidence limits.
+
+- The Windows standalone App (`Piik.exe`, built by `scripts/build-standalone.ps1`)
+  embeds the Web build and the capture and tunnel helpers, unpacks the helpers
+  beside itself, and keeps settings and presets in a `piik-data` folder beside the
+  exe. On a machine with an NVIDIA GPU the helper enumerates only that GPU;
+  mobile viewers start at half rate on 100+ fps shares. The [guide](../standalone/Piik-Guide.md)
+  owns usage; the phone join freeze at 2560-wide pictures is a documented limit.
 
 Website delivery includes a bilingual reader documentation center generated
 from the repository's guides alongside the homepage, with search and detailed

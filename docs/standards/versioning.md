@@ -108,42 +108,16 @@ SHA-256 listing generated from the verified packages. GitHub's automatic source
 archives are separate from Piik's uploaded packages. Retain original build
 metadata with operator deployment records as described in [deployment](../deployment.md).
 
-Update checks compare actual release precedence. The App reports its compiled
-OS/architecture and links to that platform's ZIP in the selected release metadata;
-the release page remains the fallback when no matching attachment is available.
-Fixed archive names and published names with that release's SHA suffix are
-accepted only with the provider's exact release download URL. Downloads start on
-click; checking for an update does not fetch the archive.
-Newer version wins even when the source SHA is unchanged. Same version with a
-different known SHA reports a different official build, not a newer one. A
-development build with a known differing SHA offers the official release as a
-manual choice; it makes no ordering claim. Older releases never cause an update
-notice. Unknown SHA is not inferred from a branch name in GitHub metadata.
-The publisher records a full SHA in `target_commitish` and verifies actual tag
-identity separately. Stable update notices ignore prereleases.
+Neither the App nor the Server checks for updates: release precedence is the
+packager's and operator's concern, and a new version arrives as a new package.
+Newer version wins even when the source SHA is unchanged; the publisher records a
+full SHA in `target_commitish` and verifies actual tag identity separately.
 
 ### Major-Upgrade Guidance
 
-The App update notice keeps a separate link to the selected provider's exact
-release page. A newer major adds a short, visible breaking-change notice; the
-Server logs the same distinction while preserving its checker JSON and exit
-codes. This is release guidance, not a replacement for actual wire checks.
-Updates remain a manual action. Release prose stays on GitHub/Gitee; the App
-does not fetch or render remote Markdown or add a second changelog store.
-Direct download remains the primary action; reading notes is optional. Keep the
-major warning inline, without a confirmation dialog or mandatory website detour.
-
-Older installed Apps cannot acquire new warning UI from release metadata.
-Their historical download behavior is accepted; do not split release feeds or
-force a stepping-stone release solely to make advisory presentation identical.
-Before a major release, put bilingual upgrade guidance near the top of its
-release notes and on the website download entry. Name the actual incompatible
-App/Site combinations, required upgrade order, interruptions and any persistent
-data implications. Do not assume everyone installed the preceding minor/patch.
-Verify the oldest relevant public App/page and the last preceding-major release
-against the candidate: actual mismatches must fail clearly at their owning
-contract. Keep historical packages available through GitHub releases. A major
-preparation change does not itself authorize a wire bump, migration or release.
+A newer major changes the wire contract only through the compatibility rules
+above; there is no in-product upgrade notice. Release prose stays with the
+publisher's release page.
 
 ## Automatic Publication
 
@@ -198,7 +172,7 @@ introduced by this policy.
 
 ## Container Distribution
 
-`ghcr.io/tntcrafthim/piik` wraps the same verified linux/amd64 and linux/arm64
+`ghcr.io/lin-2352/piik` wraps the same verified linux/amd64 and linux/arm64
 Server archives as the GitHub release. The packager's optional
 `--container-image <tag>` builds from that architecture's extraction;
 CI checks its Compose recipe on the matching native runner and transfers the verified image
@@ -279,34 +253,20 @@ commit is not the Piik source revision; release metadata retains the original
 GitHub SHA. Build each target once and copy the same archives, notices,
 version, full source SHA and artifact hashes to both. A Git repository mirror
 alone does not synchronize Release attachments. Keep one release description.
-Update detection reads each provider's API metadata; it does not parse the public
-changelog or download build descriptors. The existing pipeline owns local
-machine-readable build metadata.
-
-The two providers only adapt API fields and download locations into the same
-release model. Share version comparison, channel filtering and package validation.
-The normal background check tries GitHub, then Gitee if the primary is unavailable;
-download links may expose both verified locations. A lagging mirror must not
-cause a downgrade or a version/hash disagreement to be silently accepted.
-Gitee's documented latest endpoint means last updated, so provider normalization
-must select stable release precedence explicitly, not equate provider ordering.
+The App and Server never check for updates themselves; the existing pipeline owns
+local machine-readable build metadata.
 
 Synchronize only an explicitly published release; branch pushes stay quiet.
 Retrying a failed mirror upload reuses the original package. Advertise a mirrored
 package as available only after its required attachments and matching metadata
 are present. Tokens belong only to publishing, never the distributed Browser/App.
-The public mirror is [TNTcraftHIM/Piik](https://gitee.com/TNTcraftHIM/Piik).
+The mirror repository is configured by the maintainer (`GITEE_REPOSITORY`).
 The publisher reuses the shared artifact validator, checks every public package
 against GitHub's published asset digest, then uploads and verifies anonymous
 Gitee downloads. Gitee has no draft API: an incomplete mirror remains a preview
 release, and becomes stable only after every file passes. A source marker in
 the release body (`<!-- piik-source: <full-SHA> -->`) preserves the GitHub revision;
 the mirror's `target_commitish` identifies only its own README commit.
-App notices and the operator check share their existing version comparison
-across providers. Each provider has its own deadline; the mirror checks at most
-ten pages of 100 releases and rejects an incomplete listing. An explicit operator
-`--api-url` override checks that endpoint alone. A valid primary result, including
-an up-to-date result, does not consult the mirror.
 
 Gitee currently documents 100 MB per attachment and 1 GB total repository
 attachments for ordinary projects. The mirror rejects files above 100,000,000
@@ -322,8 +282,6 @@ retained stable versions; never delete either retained version to make an
 unverified replacement fit. Exhausted storage leaves a pending preview.
 Target authentication, uploads, anonymous metadata/CORS and the complete matching
 Server/three-platform App downloads and SHA-256 checks passed for the public release.
-Use API metadata in the Browser; ordinary asset-link redirects are not guaranteed
-to permit cross-origin fetch, even when a normal download works.
 
 ## Public Release Baseline
 

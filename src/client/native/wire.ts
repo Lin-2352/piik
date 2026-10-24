@@ -52,6 +52,8 @@ export const nativeHealthSchema = nativeDiscoveryIdentitySchema.extend({
       hardwareHEVC: z.boolean().default(false),
       // Older Apps close control on unknown requests; ask only when advertised.
       hostSettings: z.boolean().default(false),
+      // Per-viewer frame-rate cap; an older App would close control on the request.
+      frameRateCap: z.boolean().default(false),
     })
     .prefault({}),
 });
@@ -262,6 +264,7 @@ export const nativeAckResponseSchema = z
       "edge-answer-accepted",
       "edge-candidate-accepted",
       "edge-closed",
+      "edge-frame-rate-capped",
       "receive-candidate-accepted",
       "receiver-closed",
       "receive-stopped",

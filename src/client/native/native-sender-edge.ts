@@ -24,6 +24,8 @@ export interface NativeEdgeControl {
     payload: SignalPayload,
   ): Promise<void>;
   closeEdge(shareId: string, connectionId: string): Promise<void>;
+  /** Sends one viewer only the base temporal layer (half the frame rate). */
+  capEdgeFrameRate?(shareId: string, connectionId: string, capped: boolean): Promise<void>;
   onEvent(listener: (event: NativeClientEvent) => void): () => void;
 }
 

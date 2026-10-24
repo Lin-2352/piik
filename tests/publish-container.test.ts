@@ -5,8 +5,8 @@ vi.mock("node:child_process", () => ({ execFileSync: command }));
 vi.mock("../scripts/release-artifacts.mjs", () => ({ readReleaseArtifacts: artifacts }));
 
 const version = "v1.2.1", revision = "a".repeat(40), digest = "b".repeat(64);
-const repository = "TNTcraftHIM/Piik", image = `piik-candidate:${revision}`;
-const tag = `ghcr.io/tntcrafthim/piik:${version}`;
+const repository = "Lin-2352/piik", image = `piik-candidate:${revision}`;
+const tag = `ghcr.io/lin-2352/piik:${version}`;
 const servers = ["amd64", "arm64"].map(arch => ({
   name: `piik-aaaaaaa-${arch}-runtime.tar.gz`, sha256: arch === "amd64" ? digest : "d".repeat(64), arch,
 }));
@@ -80,7 +80,7 @@ describe("container publication", () => {
     await publish();
     expect(artifacts).toHaveBeenCalledWith("artifacts", version, revision);
     expect(pushes()).toEqual([`${tag}-amd64`, `${tag}-arm64`]);
-    expect(indexes()).toEqual([[tag, `${tag}-amd64`, `${tag}-arm64`], ["ghcr.io/tntcrafthim/piik:latest", tag]]);
+    expect(indexes()).toEqual([[tag, `${tag}-amd64`, `${tag}-arm64`], ["ghcr.io/lin-2352/piik:latest", tag]]);
   });
   it.each([
     { draft: true }, { badArchive: true }, { wrongSource: true }, { wrongImage: true },

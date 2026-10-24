@@ -11,9 +11,12 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/TNTcraftHIM/Piik/internal/app"
+	"github.com/TNTcraftHIM/Piik/internal/app/config"
+	"github.com/TNTcraftHIM/Piik/internal/app/payload"
 )
 
 func main() {
@@ -34,6 +37,7 @@ func run(args []string) int {
 	})
 	flags.BoolVar(&options.Local, "local", false, "use the self-contained Local room authority")
 	flags.BoolVar(&options.Link, "link", false, "create one public Viewer invitation link")
+	flags.BoolVar(&options.UseWindow, "window", false, "open Piik in its own window instead of the browser (Windows; H.264 only)")
 	flags.BoolVar(&options.Debug, "debug", false, "save opt-in App diagnostics to rotated files")
 	flags.StringVar(&options.LogDir, "log-dir", "", "diagnostic directory (overrides PIIK_LOG_DIR)")
 	flags.StringVar(&options.CaptureProcess, "capture-process", "", "path to the platform native capture process")
@@ -48,6 +52,26 @@ func run(args []string) int {
 		return 2
 	}
 	options.DisableBrowser = os.Getenv("PIIK_CLIENT_GATE_NO_BROWSER") == "true"
+	// A standalone build keeps its settings and presets beside itself so the
+	// folder is portable; --config still chooses another file.
+	if options.ConfigPath == "" && payload.Standalone() {
+		if executable, err := os.Executable(); err == nil {
+			if legacy, legacyErr := config.DefaultPath(); legacyErr == nil {
+				if path, portableErr := payload.PortableConfig(filepath.Join(filepath.Dir(executable), "piik-data"), legacy); portableErr == nil {
+					options.ConfigPath = path
+				} else {
+					fmt.Fprintln(os.Stderr, "Piik: could not use a settings folder beside the exe, using your user settings:", portableErr)
+				}
+			}
+		}
+	}
+	// A standalone build carries its helper programs and unpacks them beside
+	// itself; explicit helper paths always win, and an ordinary build does nothing.
+	if options.CaptureProcess == "" && options.TunnelProcess == "" {
+		if err := payload.EnsureNextToExecutable(); err != nil {
+			fmt.Fprintln(os.Stderr, "Piik: could not unpack its helper programs:", err)
+		}
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -18,7 +18,7 @@ or press **O** there to retry. Keep the App running while using that page.
 
 Windows App and browser sharing are the primary tested paths. Physical-device
 coverage for the macOS and Linux apps is still limited; test results and
-[feedback](https://github.com/TNTcraftHIM/Piik/issues) are welcome. macOS native
+feedback are welcome. macOS native
 capture requires macOS 13 or newer on Apple silicon or Intel. Package construction and public Release
 publication are separate steps in [deployment](../../docs/deployment.md).
 
@@ -34,11 +34,9 @@ publication are separate steps in [deployment](../../docs/deployment.md).
   [App configuration](../../docs/standards/configuration.md#piik-app-configuration)
   covers saved preferences and custom paths.
 - The `--site`, `--local`, and `--link` flags select a mode for CI and development.
-- The default launcher checks official releases after it opens, using GitHub
-  first and Gitee if GitHub is unavailable. Click the update button to download
-  the matching platform ZIP, or open the release page when no package matches.
-  **Release notes** opens separately; a new major version includes an upgrade
-  warning. The App does not install or replace itself.
+- The launcher makes no network request on its own: it never checks for or
+  downloads updates. A new version is a new package from whoever distributes it
+  to you. The App does not install or replace itself.
 
 Local rooms last for this App run and work on a reachable LAN. **Public invite**
 uses the packaged Cloudflare Tunnel helper to expose that same room service at a
@@ -299,3 +297,16 @@ media delivery to an independent Linux peer. Native P2P quality evidence and
 embedded SFU delivery have explicit gates. macOS and Linux capture still
 require physical desktop/media gates; CI compilation and package smoke do not
 substitute for them.
+
+## Piik window (Windows, opt-in)
+
+`--window` shows the App's page in its own window instead of a browser tab: the
+same local page, hosted in WebView2 (the Edge engine that ships with Windows
+11). Closing the window quits the App. Without the flag, or when the WebView2
+runtime is missing, and always on macOS and Linux, the App uses the browser.
+
+The window is opt-in because WebView2 cannot play H.265: enabling its H.265
+receive feature crashes the page as soon as an H.265 stream arrives (tested,
+`STATUS_ACCESS_VIOLATION`). The Host previews its own share by receiving it, so
+in the window it uses automatic codec selection (H.264) and hides H.265. Use the
+browser for H.265.

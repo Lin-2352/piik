@@ -88,7 +88,11 @@ contract. [Status](../status.md) indexes delivery and remaining acceptance.
   a healthy original output. Platform quality preference uses the hardware
   encoder's standard quality-versus-speed hint. Pion owns Native WebRTC
   transport; the shared media adapter uses LiveKit media components for bandwidth
-  estimation, forwarding allocation, pacing and recovery.
+  estimation, forwarding allocation, pacing and recovery. Three guards sit around
+  the estimator (`forwarding/estimate.go`): a placeholder estimate is never
+  adopted, one probe may at most double the target, and persistent receiver-report
+  loss cuts it; they correct measured faults in LiveKit's output, not a second
+  adaptation ladder.
   Windows VP8 uses libvpx's realtime mode; it does not claim the same hardware
   quality-versus-speed control or per-edge Browser adaptation.
 - With App available, Browser H.264 capture can use one local sender and the
@@ -137,6 +141,44 @@ advertises it as `nativeMedia.bitrateModeControl`. Padding a stream with filler
 data to an exact target was tried and rejected: in-band filler units are dropped
 by the RTP payloaders, and reserved or SEI units broke Chrome playback through
 the SFU.
+
+A viewer whose browser cannot present the full frame rate gets half of it, decided
+per viewer and kept for that connection. Chrome on Android (measured on a
+Dimensity 8100 phone) holds 90 fps but, fed 120 fps, discards every decoded frame
+("too many frames backed up in the decoder") until the rate drops, then needs about
+10 s to recover. Native H.265 and H.264 shares at 100 fps or more therefore encode
+two temporal layers; enhancement frames are non-reference (HEVC TSA_N; H.264
+slices with nal_ref_idc 0, usually after an SVC prefix NAL). A frame with any
+reference slice is always base layer, whatever its prefix says. A native App Host
+caps a direct viewer through `cap-edge-frame-rate`, only to an App that advertises
+`nativeMedia.frameRateCap`. The policy (`src/client/media/frame-rate-cap.ts`) skips
+two warm-up windows, then caps at once when a loss-free window decodes under 25%
+of what the stream should carry, or after three weak windows (under 85%) in a row.
+A window that lost packets is never counted as weak: a lost frame is not a slow
+decoder. A viewer that reports itself as a mobile browser (`videoDecode.mobile`, from the
+client hint or user agent) is capped from its first frame when the share carries
+100 fps or more, so a phone never receives the stream it cannot decode; below
+100 fps the flag does nothing. Viewers fed through a relay or the SFU are not judged, so a phone placed
+behind either keeps the full rate. The forwarding output drops that viewer's
+enhancement layer and renumbers the rest, so its sequence stays gap-free and NACKs
+still resolve. LiveKit reads the HEVC layer from the NAL header; for H.264 the
+encoded source records each frame's layer from its prefix NAL and strips the
+prefix, so receivers get plain AVC. A request for a key frame that lands on an
+enhancement slot is carried to the next base-layer frame. The cap never halves
+below 50 fps.
+
+The quantizer ceiling (QP 30) that protects picture quality applies only when the
+bitrate budget is large enough that it cannot defeat the ceiling (H.264 above
+about 0.075 bits per pixel per frame, H.265 above 0.04); below that the encoder
+may use any quantizer, because a pinned quantizer overshoots the bitrate ceiling,
+overflows the paced sender and starves the viewer of packets. The send-side
+probe driver runs at most once per 10 ms; it needs no per-packet call.
+Native Windows encoding runs on the NVIDIA GPU whenever the machine has one: the
+helper enumerates only NVIDIA adapters then (`PreferNvidia`), so an integrated GPU
+is never offered as an encoder or capture adapter. A machine without an NVIDIA GPU
+keeps every adapter. H.264, H.265 and AV1 encode in NVENC; VP8 is the CPU
+(libvpx) compatibility fallback, since NVENC has no VP8 encoder, and only its
+capture and conversion run on the GPU.
 Native H264 retains Constrained Baseline. Capture validates the coding-tool subset under
 RFC 6184, including equivalent Constrained Baseline constraint bytes, and reports
 the actual SPS profile/level; one vendor's byte spelling is not the contract.

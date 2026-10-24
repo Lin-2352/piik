@@ -417,6 +417,18 @@ func (session *Session) Handle(ctx context.Context, payload []byte) (result any,
 			return nil, err
 		}
 		return response(envelope, "edge-candidate-accepted"), nil
+	case "cap-edge-frame-rate":
+		var request capEdgeFrameRateRequest
+		if err := decodeStrict(payload, &request); err != nil ||
+			request.Type != envelope.Type || request.Capped == nil ||
+			!validIdentities(request.ShareID, request.ConnectionID) {
+			return nil, protocolViolation("native cap-edge-frame-rate request is invalid")
+		}
+		// Only a Host has encoded outputs to cap; a missing share or edge is a no-op.
+		if media, ok := session.currentMedia(request.ShareID).(interface{ CapEdgeFrameRate(string, bool) }); ok {
+			media.CapEdgeFrameRate(request.ConnectionID, *request.Capped)
+		}
+		return response(envelope, "edge-frame-rate-capped"), nil
 	case "close-edge":
 		var request closeEdgeRequest
 		if err := decodeStrict(payload, &request); err != nil ||

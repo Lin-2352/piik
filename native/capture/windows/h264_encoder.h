@@ -56,6 +56,8 @@ struct VideoProfile final {
   // raised the quantiser on ordinary content and made fine detail shimmer.
   UINT32 mean_bit_rate() const { return bit_rate; }
   static constexpr UINT32 kMaxQuantizer = 30;
+  // The largest quantizer both H.264 and HEVC allow: no floor on picture quality.
+  static constexpr UINT32 kQuantizerUnbounded = 51;
   // How often the capture loop re-reads display presentation (window resize).
   UINT32 presentation_refresh_frames() const { return frame_rate * 2; }
   LONGLONG frame_duration_100ns() const {
@@ -183,6 +185,10 @@ struct NalSummary final {
   bool sps = false;
   bool pps = false;
   bool idr = false;
+  UINT8 temporal_id = 0;  // from an SVC prefix NAL (14); 0 for a single-layer stream
+  // Has coded slices and none is referenced (nal_ref_idc 0, no IDR): nothing
+  // depends on this frame, whatever the encoder says about layers.
+  bool non_reference = false;
   std::optional<std::string> profile_level_id;
 };
 
@@ -193,6 +199,7 @@ struct HevcSummary final {
   bool parameter_sets = false;  // VPS, SPS and PPS all present
   bool irap = false;
   bool picture = false;
+  UINT8 temporal_id = 0;  // highest nuh_temporal_id of the picture's slices
 };
 
 struct ObuSummary final {
@@ -216,6 +223,10 @@ inline bool IsNewHardwareCodec(OutputKind kind) {
 }
 
 std::vector<Adapter> EnumerateAdapters();
+// Keeps only NVIDIA adapters when there is at least one, otherwise returns the
+// list unchanged: an integrated GPU is never an encoder or capture candidate
+// beside an NVIDIA GPU.
+std::vector<Adapter> PreferNvidia(std::vector<Adapter> adapters);
 const Adapter& SelectAdapter(const std::vector<Adapter>& adapters, UINT index);
 DeviceContext CreateDevice(const Adapter& adapter);
 ActivationList EnumerateHardwareEncoders(const Adapter& adapter,
@@ -231,7 +242,8 @@ std::string GuidString(const GUID& value);
 void SetU32(ICodecAPI* codec, const GUID& key, UINT32 expected,
             const std::string& name);
 void ConfigureCodec(ICodecAPI* codec,
-                    const VideoProfile& profile = kDefaultVideoProfile);
+                    const VideoProfile& profile = kDefaultVideoProfile,
+                    OutputKind kind = OutputKind::h264);
 ComPtr<IMFMediaType> CreateOutputType(
     const VideoProfile& profile = kDefaultVideoProfile, OutputKind kind = OutputKind::h264);
 ComPtr<IMFMediaType> CreateInputType(
@@ -251,6 +263,17 @@ ComPtr<IMFSample> CreateSurfaceSample(ID3D11Texture2D* texture,
 NalSummary InspectAnnexB(const std::vector<UINT8>& bytes);
 ObuSummary InspectObus(const std::vector<UINT8>& bytes);
 HevcSummary InspectHevc(const std::vector<UINT8>& bytes);
+// Quality floor: cap the quantizer so a hard frame spends bits instead of
+// turning to mush. It is only safe where the budget is large; under a tight one
+// a pinned quantizer makes the encoder exceed its bitrate ceiling (H.264 at QP 30
+// measured 27-35 Mbps against a 15 Mbps ceiling), which floods the sender. So
+// it applies above a per-codec density of bits per pixel and is otherwise off.
+UINT32 MaxQuantizer(OutputKind kind, const VideoProfile& profile);
+
+// Two temporal layers let the Host send a viewer that cannot decode the full
+// rate every other frame. HEVC carries the layer in its NAL header and H.264 in
+// an SVC prefix NAL; only a rate whose half stays smooth (>= 50 fps) is split.
+UINT32 TemporalLayerCount(OutputKind kind, const VideoProfile& profile);
 std::vector<UINT8> ReadSample(IMFSample* sample);
 
 struct EncodedAccessUnit final {
@@ -305,6 +328,8 @@ class LiveEncoder final : public VideoEncoder {
   // The SPS level is fixed by the session's configured profile; live bitrate
   // changes must not move the level the bitstream is checked against.
   const VideoProfile configured_;
+  // The quantizer cap currently set on the encoder (see MaxQuantizer).
+  UINT32 max_quantizer_ = 0;
   MFT_OUTPUT_STREAM_INFO output_info_ = {};
   UINT32 input_requests_ = 0;
   std::optional<std::string> profile_level_id_;

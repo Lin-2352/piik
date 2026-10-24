@@ -53,7 +53,7 @@ docker compose run --rm piik --check-config
 docker compose up -d
 ```
 
-The `ghcr.io/tntcrafthim/piik:latest` image includes the Web UI, signaling, STUN
+The `ghcr.io/lin-2352/piik:latest` image includes the Web UI, signaling, STUN
 and optional SFU. Docker selects the matching architecture automatically. Complete [HTTPS](#2-enable-https) and
 [firewall configuration](#3-open-the-ports-and-verify) below. The default is P2P;
 the sample `.env` also shows how to enable SFU fallback. Keep the `piik-data`

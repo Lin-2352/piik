@@ -657,6 +657,16 @@ func (session *Session) disableCaptureLayer(stream *nativecapture.Stream, layer 
 	return err
 }
 
+// CapEdgeFrameRate sends one viewer only the base temporal layer.
+func (session *Session) CapEdgeFrameRate(connectionID string, capped bool) {
+	session.mu.Lock()
+	edge := session.edges[connectionID]
+	session.mu.Unlock()
+	if edge != nil {
+		edge.CapFrameRate(capped)
+	}
+}
+
 func (session *Session) CloseEdge(connectionID string) {
 	session.mu.Lock()
 	edge := session.edges[connectionID]

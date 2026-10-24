@@ -935,3 +935,21 @@ describe("viewer quality evidence", () => {
   });
 
 });
+
+describe("receive counters in viewer evidence", () => {
+  it("are carried when known and never carry a decoder name", () => {
+    const window = qualityEvidenceWindowFromMetrics(receiveMetrics({
+      intervalFramesReceived: 118,
+      intervalKeyFramesDecoded: 1,
+      intervalPliCount: 4,
+      intervalNackCount: 9,
+      decoderImplementation: "device-specific-decoder",
+      powerEfficientDecoder: false,
+    }));
+    expect(window?.metrics).toMatchObject({
+      framesReceivedDelta: 118, keyFramesDecodedDelta: 1, pliCountDelta: 4, nackCountDelta: 9,
+      powerEfficientDecoder: false,
+    });
+    expect(JSON.stringify(window)).not.toContain("device-specific-decoder");
+  });
+});

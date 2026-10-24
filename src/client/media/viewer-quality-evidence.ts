@@ -181,7 +181,17 @@ export function qualityEvidenceWindowFromMetrics(
       64,
       /^audio\/[A-Za-z0-9.+-]{1,32}$/i,
     ),
+    framesReceivedDelta: boundedInteger(metrics.intervalFramesReceived, 10_000),
+    keyFramesDecodedDelta: boundedInteger(metrics.intervalKeyFramesDecoded, 10_000),
+    pliCountDelta: boundedInteger(metrics.intervalPliCount, 100_000),
+    nackCountDelta: boundedInteger(metrics.intervalNackCount, 1_000_000),
+    powerEfficientDecoder: metrics.powerEfficientDecoder,
   };
+  // The receive counters are optional on the wire: leave out what is unknown.
+  for (const key of ["framesReceivedDelta", "keyFramesDecodedDelta", "pliCountDelta",
+    "nackCountDelta", "powerEfficientDecoder"] as const) {
+    if (candidate[key] === null || candidate[key] === undefined) delete candidate[key];
+  }
   const parsed = viewerQualityEvidenceMetricsSchema.safeParse(candidate);
   return parsed.success ? { windowMs, metrics: parsed.data } : null;
 }
@@ -543,5 +553,11 @@ export function metricsFromQualityEvidence(
     audioConcealedSamplesPercent: metrics.audioConcealedSamplesPercent,
     intervalAudioConcealmentEvents: metrics.audioConcealmentEventsDelta,
     audioCodec: metrics.audioCodec,
+    intervalFramesReceived: metrics.framesReceivedDelta ?? null,
+    intervalKeyFramesDecoded: metrics.keyFramesDecodedDelta ?? null,
+    intervalPliCount: metrics.pliCountDelta ?? null,
+    intervalNackCount: metrics.nackCountDelta ?? null,
+    decoderImplementation: null,
+    powerEfficientDecoder: metrics.powerEfficientDecoder ?? null,
   };
 }

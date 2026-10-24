@@ -48,7 +48,7 @@ docker compose run --rm piik --check-config
 docker compose up -d
 ```
 
-`ghcr.io/tntcrafthim/piik:latest` 镜像包含网页、信令、STUN 和可选 SFU。
+`ghcr.io/lin-2352/piik:latest` 镜像包含网页、信令、STUN 和可选 SFU。
 Docker 会自动选择对应架构的镜像。
 接着完成下方的 [HTTPS 配置](#2-配置-https)和[端口放行](#3-放行端口并检查)。
 默认使用 P2P；如需 SFU 兜底，按 `.env` 中的说明启用即可。

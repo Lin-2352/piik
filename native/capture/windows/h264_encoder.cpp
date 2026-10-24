@@ -83,6 +83,20 @@ std::vector<Adapter> EnumerateAdapters() {
       adapters.push_back(std::move(current));
     }
   }
+  return PreferNvidia(std::move(adapters));
+}
+
+std::vector<Adapter> PreferNvidia(std::vector<Adapter> adapters) {
+  constexpr UINT kNvidiaVendorId = 0x10DE;
+  const bool has_nvidia = std::any_of(
+      adapters.begin(), adapters.end(),
+      [](const Adapter& adapter) { return adapter.description.VendorId == kNvidiaVendorId; });
+  if (!has_nvidia) return adapters;
+  adapters.erase(std::remove_if(adapters.begin(), adapters.end(),
+                                [](const Adapter& adapter) {
+                                  return adapter.description.VendorId != kNvidiaVendorId;
+                                }),
+                 adapters.end());
   return adapters;
 }
 
@@ -339,9 +353,28 @@ bool TrySetU32(ICodecAPI* codec, const GUID& key, UINT32 value) {
   return holds;
 }
 
+UINT32 MaxQuantizer(OutputKind kind, const VideoProfile& profile) {
+  // Bits per pixel per frame at which QP 30 stops overshooting on hard content.
+  // H.264 was measured; HEVC spends about half the bits at the same quantizer.
+  // AV1's scale differs and is unmeasured, so it keeps the previous behaviour.
+  double threshold = 0.0;
+  if (kind == OutputKind::h264) threshold = 0.075;
+  else if (kind == OutputKind::h265) threshold = 0.04;
+  const double pixel_rate = static_cast<double>(profile.width) * profile.height * profile.frame_rate;
+  if (threshold == 0.0 || pixel_rate <= 0.0) return VideoProfile::kMaxQuantizer;
+  return profile.bit_rate / pixel_rate >= threshold ? VideoProfile::kMaxQuantizer
+                                                    : VideoProfile::kQuantizerUnbounded;
+}
+
+UINT32 TemporalLayerCount(OutputKind kind, const VideoProfile& profile) {
+  const bool layered = kind == OutputKind::h265 || kind == OutputKind::h264;
+  return layered && profile.frame_rate >= 100 ? 2 : 1;
+}
+
 void ConfigureCodec(
     ICodecAPI* codec,
-    const VideoProfile& profile) {
+    const VideoProfile& profile,
+    OutputKind kind) {
   // Variable mode asks for peak-constrained VBR and falls back to CBR on an
   // encoder that refuses it; Constant mode is always CBR.
   if (profile.constant_bitrate ||
@@ -366,10 +399,15 @@ void ConfigureCodec(
                  profile.quality_vs_speed());
   // Quality floor: a hard frame may spend more of the budget instead of turning
   // to mush. Measured on a 120 fps clip at 38 Mbps: average QP 26 -> 20 with the
-  // bitrate unchanged and every frame still delivered.
-  (void)TrySetU32(codec, CODECAPI_AVEncVideoMaxQP, VideoProfile::kMaxQuantizer);
+  // bitrate unchanged and every frame still delivered. Off under a tight budget.
+  (void)TrySetU32(codec, CODECAPI_AVEncVideoMaxQP, MaxQuantizer(kind, profile));
   RequireProperty(codec, CODECAPI_AVEncVideoForceKeyFrame,
                   "codec-force-keyframe");
+  // Optional: an encoder without temporal layers still serves every viewer at
+  // the full rate; only the per-viewer cap then has nothing to drop.
+  if (const UINT32 layers = TemporalLayerCount(kind, profile); layers > 1) {
+    (void)TrySetU32(codec, CODECAPI_AVEncVideoTemporalLayerCount, layers);
+  }
 }
 
 ComPtr<IMFMediaType> CreateOutputType(
@@ -528,6 +566,7 @@ NalSummary InspectAnnexB(const std::vector<UINT8>& bytes) {
     return summary;
   }
   summary.annex_b = true;
+  bool slices = false, referenced = false;
   while (current) {
     size_t nal_start = current->first + current->second;
     std::optional<std::pair<size_t, size_t>> next = FindStartCode(bytes, nal_start);
@@ -537,6 +576,14 @@ NalSummary InspectAnnexB(const std::vector<UINT8>& bytes) {
       summary.sps = summary.sps || nal_type == 7;
       summary.pps = summary.pps || nal_type == 8;
       summary.idr = summary.idr || nal_type == 5;
+      if (nal_type == 1 || nal_type == 5) {
+        slices = true;
+        referenced = referenced || nal_type == 5 || (bytes[nal_start] & 0x60) != 0;
+      }
+      // SVC prefix NAL: temporal_id is the top three bits of its fourth byte.
+      if (nal_type == 14 && nal_end - nal_start >= 4) {
+        summary.temporal_id = std::max<UINT8>(summary.temporal_id, bytes[nal_start + 3] >> 5);
+      }
       if (nal_type == 7 && nal_end - nal_start >= 4) {
         std::string value = ProfileLevelId(bytes[nal_start + 1],
                                            bytes[nal_start + 2],
@@ -550,7 +597,23 @@ NalSummary InspectAnnexB(const std::vector<UINT8>& bytes) {
     }
     current = next;
   }
+  summary.non_reference = slices && !referenced;
   return summary;
+}
+
+// "type/tid" per NAL unit, for diagnostics only.
+std::string DescribeHevcNals(const std::vector<UINT8>& bytes) {
+  std::string out;
+  for (auto current = FindStartCode(bytes, 0); current;) {
+    const size_t start = current->first + current->second;
+    const auto next = FindStartCode(bytes, start);
+    if (start + 1 < bytes.size()) {
+      if (!out.empty()) out += ' ';
+      out += std::to_string((bytes[start] >> 1) & 0x3f) + "/" + std::to_string((bytes[start + 1] & 0x07) - 1);
+    }
+    current = next;
+  }
+  return out;
 }
 
 HevcSummary InspectHevc(const std::vector<UINT8>& bytes) {
@@ -574,6 +637,14 @@ HevcSummary InspectHevc(const std::vector<UINT8>& bytes) {
     pps = pps || type == 34;
     summary.irap = summary.irap || (type >= 16 && type <= 21);
     summary.picture = summary.picture || type <= 21;
+    // nuh_temporal_id_plus1 is 1..7; zero would be a temporal id of -1.
+    if ((bytes[nal_start + 1] & 0x07) == 0) {
+      summary.annex_b = false;
+      return summary;
+    }
+    if (type <= 31) {
+      summary.temporal_id = std::max<UINT8>(summary.temporal_id, (bytes[nal_start + 1] & 0x07) - 1);
+    }
     current = next;
   }
   summary.parameter_sets = vps && sps && pps;
@@ -752,7 +823,8 @@ LiveEncoder::LiveEncoder(
       selected_(std::move(selected)), events_(selected_.events.Get()), profile_(profile), configured_(profile) {
   if (kind != OutputKind::h264 && !IsNewHardwareCodec(kind))
     Fail("mft-codec", "hardware encoder codec is unsupported");
-  ConfigureCodec(selected_.codec.Get(), profile_);
+  ConfigureCodec(selected_.codec.Get(), profile_, kind);
+  max_quantizer_ = MaxQuantizer(kind, profile_);
   ComPtr<IMFMediaType> output_type = CreateOutputType(profile_, kind);
   Check(selected_.transform->SetOutputType(0, output_type.Get(), 0),
         "mft-set-output-type");
@@ -784,6 +856,13 @@ void LiveEncoder::SetBitrate(UINT32 bitrate) {
   SetU32(selected_.codec.Get(), CODECAPI_AVEncCommonMeanBitRate, profile_.mean_bit_rate(),
          "codec-live-bitrate");
   (void)TrySetU32(selected_.codec.Get(), CODECAPI_AVEncCommonMaxBitRate, bitrate);
+  // The floor depends on the budget: a live cut must not leave it pinning the
+  // quantizer under a ceiling it can no longer meet.
+  const UINT32 floor = MaxQuantizer(kind, profile_);
+  if (floor != max_quantizer_ &&
+      TrySetU32(selected_.codec.Get(), CODECAPI_AVEncVideoMaxQP, floor)) {
+    max_quantizer_ = floor;
+  }
 }
 
 EncodedAccessUnit LiveEncoder::Encode(
@@ -841,8 +920,11 @@ EncodedAccessUnit LiveEncoder::Encode(
       }
       // A recovery point carries VPS/SPS/PPS with an IRAP picture.
       const bool key_frame = hevc.irap && hevc.parameter_sets;
-      if (force_key_frame && !key_frame) {
-        Fail("bitstream-recovery-unit", "requested live recovery unit lacks VPS, SPS, PPS, or IRAP");
+      // With temporal layers an enhancement slot cannot become a key frame; the
+      // encoder makes the next base-layer frame one, so the caller asks again.
+      if (force_key_frame && !key_frame && hevc.temporal_id == 0) {
+        Fail("bitstream-recovery-unit", "requested live recovery unit lacks VPS, SPS, PPS, or IRAP (NAL " +
+                                            DescribeHevcNals(bytes) + ")");
       }
       sequence_header_seen_ = sequence_header_seen_ || hevc.parameter_sets;
       if (!sequence_header_seen_) {
@@ -865,7 +947,10 @@ EncodedAccessUnit LiveEncoder::Encode(
       }
       profile_level_id_ = nal.profile_level_id;
     }
-    if (force_key_frame && !(nal.sps && nal.pps && nal.idr)) {
+    // An enhancement-layer slot cannot become a key frame; the request carries
+    // to the next base-layer frame (adaptive_encoder keeps it pending).
+    if (force_key_frame && !(nal.sps && nal.pps && nal.idr) && nal.temporal_id == 0 &&
+        !nal.non_reference) {
       Fail("bitstream-recovery-unit",
            "requested live recovery unit lacks SPS, PPS, or IDR");
     }
