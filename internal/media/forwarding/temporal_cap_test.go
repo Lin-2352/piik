@@ -156,3 +156,19 @@ func BenchmarkTemporalCapOriginal(b *testing.B) {
 		cap.original(1, uint64(i%10000))
 	}
 }
+
+// The forwarder can lag the encoded source (a large key frame fanned out to many
+// viewers); a frame's layer must stay known for seconds, not a couple of frames.
+func TestFrameTemporalSurvivesAForwarderBacklog(t *testing.T) {
+	var source Source
+	const frames = 900 // 7.5 s at 120 fps
+	for frame := 0; frame < frames; frame++ {
+		source.recordFrameTemporal(0, uint32(frame)*750, int32(frame%2))
+	}
+	for _, frame := range []int{0, 100, 450, 899} {
+		got, known := source.FrameTemporal(0, uint32(frame)*750)
+		if !known || got != int32(frame%2) {
+			t.Fatalf("frame %d: layer %d known=%v, want %d known", frame, got, known, frame%2)
+		}
+	}
+}

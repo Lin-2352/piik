@@ -552,6 +552,7 @@ NalSummary InspectAnnexB(const std::vector<UINT8>& bytes) {
     return summary;
   }
   summary.annex_b = true;
+  bool slices = false, referenced = false;
   while (current) {
     size_t nal_start = current->first + current->second;
     std::optional<std::pair<size_t, size_t>> next = FindStartCode(bytes, nal_start);
@@ -561,6 +562,10 @@ NalSummary InspectAnnexB(const std::vector<UINT8>& bytes) {
       summary.sps = summary.sps || nal_type == 7;
       summary.pps = summary.pps || nal_type == 8;
       summary.idr = summary.idr || nal_type == 5;
+      if (nal_type == 1 || nal_type == 5) {
+        slices = true;
+        referenced = referenced || nal_type == 5 || (bytes[nal_start] & 0x60) != 0;
+      }
       // SVC prefix NAL: temporal_id is the top three bits of its fourth byte.
       if (nal_type == 14 && nal_end - nal_start >= 4) {
         summary.temporal_id = std::max<UINT8>(summary.temporal_id, bytes[nal_start + 3] >> 5);
@@ -578,6 +583,7 @@ NalSummary InspectAnnexB(const std::vector<UINT8>& bytes) {
     }
     current = next;
   }
+  summary.non_reference = slices && !referenced;
   return summary;
 }
 
@@ -617,6 +623,11 @@ HevcSummary InspectHevc(const std::vector<UINT8>& bytes) {
     pps = pps || type == 34;
     summary.irap = summary.irap || (type >= 16 && type <= 21);
     summary.picture = summary.picture || type <= 21;
+    // nuh_temporal_id_plus1 is 1..7; zero would be a temporal id of -1.
+    if ((bytes[nal_start + 1] & 0x07) == 0) {
+      summary.annex_b = false;
+      return summary;
+    }
     if (type <= 31) {
       summary.temporal_id = std::max<UINT8>(summary.temporal_id, (bytes[nal_start + 1] & 0x07) - 1);
     }
@@ -924,7 +935,8 @@ EncodedAccessUnit LiveEncoder::Encode(
     }
     // An enhancement-layer slot cannot become a key frame; the request carries
     // to the next base-layer frame (adaptive_encoder keeps it pending).
-    if (force_key_frame && !(nal.sps && nal.pps && nal.idr) && nal.temporal_id == 0) {
+    if (force_key_frame && !(nal.sps && nal.pps && nal.idr) && nal.temporal_id == 0 &&
+        !nal.non_reference) {
       Fail("bitstream-recovery-unit",
            "requested live recovery unit lacks SPS, PPS, or IDR");
     }

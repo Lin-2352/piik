@@ -186,6 +186,9 @@ struct NalSummary final {
   bool pps = false;
   bool idr = false;
   UINT8 temporal_id = 0;  // from an SVC prefix NAL (14); 0 for a single-layer stream
+  // Has coded slices and none is referenced (nal_ref_idc 0, no IDR): nothing
+  // depends on this frame, whatever the encoder says about layers.
+  bool non_reference = false;
   std::optional<std::string> profile_level_id;
 };
 

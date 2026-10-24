@@ -58,42 +58,62 @@ type Source struct {
 	// codec does not carry it where LiveKit reads it (H.264), by layer and RTP
 	// timestamp. Written before the frame's packets are enqueued.
 	temporalMu    sync.RWMutex
-	frameTemporal map[int32]*[temporalFrames]frameLayer
+	frameTemporal map[int32]*temporalHistory
 }
 
-// Enough recent frames to outlast forwarding delay at any supported rate.
-const temporalFrames = 256
+// Enough recent frames to outlast any forwarding delay (8 s at 120 fps).
+const temporalFrames = 1024
 
-type frameLayer struct {
-	timestamp uint32
-	temporal  int32
-	set       bool
+// temporalHistory remembers the last temporalFrames frames by exact timestamp,
+// evicting the oldest. Frame timestamps are multiples of the frame duration, so
+// a modulo-indexed ring would use half its slots and collide.
+type temporalHistory struct {
+	layers map[uint32]int32
+	order  [temporalFrames]uint32
+	next   int
+	count  int
+}
+
+func (history *temporalHistory) record(timestamp uint32, temporal int32) {
+	if history.layers == nil {
+		history.layers = make(map[uint32]int32, temporalFrames)
+	}
+	if _, known := history.layers[timestamp]; !known {
+		if history.count == temporalFrames {
+			delete(history.layers, history.order[history.next])
+		} else {
+			history.count++
+		}
+		history.order[history.next] = timestamp
+		history.next = (history.next + 1) % temporalFrames
+	}
+	history.layers[timestamp] = temporal
 }
 
 func (source *Source) recordFrameTemporal(layer int32, timestamp uint32, temporal int32) {
 	source.temporalMu.Lock()
 	defer source.temporalMu.Unlock()
 	if source.frameTemporal == nil {
-		source.frameTemporal = make(map[int32]*[temporalFrames]frameLayer)
+		source.frameTemporal = make(map[int32]*temporalHistory)
 	}
-	frames := source.frameTemporal[layer]
-	if frames == nil {
-		frames = new([temporalFrames]frameLayer)
-		source.frameTemporal[layer] = frames
+	history := source.frameTemporal[layer]
+	if history == nil {
+		history = new(temporalHistory)
+		source.frameTemporal[layer] = history
 	}
-	frames[timestamp%temporalFrames] = frameLayer{timestamp: timestamp, temporal: temporal, set: true}
+	history.record(timestamp, temporal)
 }
 
 // FrameTemporal reports the recorded temporal layer of the frame at timestamp.
 func (source *Source) FrameTemporal(layer int32, timestamp uint32) (int32, bool) {
 	source.temporalMu.RLock()
 	defer source.temporalMu.RUnlock()
-	frames := source.frameTemporal[layer]
-	if frames == nil {
+	history := source.frameTemporal[layer]
+	if history == nil {
 		return 0, false
 	}
-	frame := frames[timestamp%temporalFrames]
-	return frame.temporal, frame.set && frame.timestamp == timestamp
+	temporal, known := history.layers[timestamp]
+	return temporal, known
 }
 
 func (source *Source) SetTopLayerFloorDivisor(divisor int64) {

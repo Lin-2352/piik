@@ -181,6 +181,8 @@ void CheckHevcInspection() {
   assert(!InspectHevc({0x12, 0x00}).annex_b);               // AV1 OBUs are not Annex B
   // Temporal layers: NVENC's enhancement frame is AUD(35) + TSA_N(2), both TID 1.
   assert(summary.temporal_id == 0 && delta.temporal_id == 0);
+  // nuh_temporal_id_plus1 is 1..7: zero is a malformed header, not temporal id -1.
+  assert(!InspectHevc({0, 0, 0, 1, 0x02, 0x00, 0xee}).annex_b);
   const auto enhancement = InspectHevc({0, 0, 0, 1, 0x46, 0x02, 0x50, 0, 0, 0, 1, 0x04, 0x02, 0xee});
   assert(enhancement.picture && !enhancement.irap && enhancement.temporal_id == 1);
 }
@@ -188,16 +190,30 @@ void CheckHevcInspection() {
 // NVIDIA's H.264 temporal layers, as captured: a base key frame is AUD, SPS, PPS,
 // SVC prefix NAL 14 (temporal_id 0) and IDR; an enhancement frame is AUD, prefix
 // (temporal_id 1, nal_ref_idc 0) and a non-reference slice.
+std::vector<UINT8> base_key_unit() {
+  return {0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x67, 0x42, 0xc0, 0x34,
+          0, 0, 0, 1, 0x68, 0xce, 0, 0, 0, 1, 0x6e, 0xc0, 0x80, 0x07,
+          0, 0, 0, 1, 0x65, 0x88};
+}
+
 void CheckH264TemporalInspection() {
-  const auto base = InspectAnnexB({0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x67, 0x42, 0xc0, 0x34,
-                                   0, 0, 0, 1, 0x68, 0xce, 0, 0, 0, 1, 0x6e, 0xc0, 0x80, 0x07,
-                                   0, 0, 0, 1, 0x65, 0x88});
+  const auto base = InspectAnnexB(base_key_unit());
   assert(base.annex_b && base.sps && base.pps && base.idr && base.temporal_id == 0);
   const auto enhancement = InspectAnnexB({0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x0e, 0x40, 0x80, 0x27,
                                           0, 0, 0, 1, 0x01, 0x9a});
   assert(enhancement.annex_b && !enhancement.idr && enhancement.temporal_id == 1);
   // Without a prefix NAL the stream is single-layer.
   assert(InspectAnnexB({0, 0, 0, 1, 0x41, 0x9a}).temporal_id == 0);
+  // An encoder that layers without prefix NAL units still marks enhancement
+  // frames as non-reference slices (nal_ref_idc 0): nothing references them, so
+  // a key-frame request landing on one is deferred, not fatal.
+  assert(InspectAnnexB({0, 0, 0, 1, 0x01, 0x9a}).non_reference);
+  assert(InspectAnnexB({0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x01, 0x9a}).non_reference);
+  assert(!InspectAnnexB({0, 0, 0, 1, 0x41, 0x9a}).non_reference);            // reference slice
+  assert(!InspectAnnexB({0, 0, 0, 1, 0x65, 0x88}).non_reference);            // IDR
+  assert(!InspectAnnexB({0, 0, 0, 1, 0x67, 0x42, 0xc0, 0x34}).non_reference);  // no slice at all
+  assert(!InspectAnnexB({0, 0, 0, 1, 0x06, 0x05, 0, 0, 0, 1, 0x41, 0x9a}).non_reference);  // SEI is always nri 0
+  assert(!InspectAnnexB(base_key_unit()).non_reference);
 }
 
 // A reused encoder's first live frame can be an enhancement frame with no SPS;

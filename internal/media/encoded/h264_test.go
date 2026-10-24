@@ -36,3 +36,25 @@ func TestH264TemporalLayerLeavesASingleLayerStreamUntouched(t *testing.T) {
 		t.Fatalf("single-layer access unit was rewritten: temporal %d, % x", temporal, got)
 	}
 }
+
+// Encoders without SVC prefix NAL units still mark enhancement frames as
+// non-reference slices; nothing references such a frame, so it can be dropped.
+func TestH264TemporalLayerTreatsNonReferenceFramesAsDroppable(t *testing.T) {
+	for _, check := range []struct {
+		name     string
+		au       []byte
+		temporal int32
+	}{
+		{"non-reference slice, no prefix", []byte{0, 0, 0, 1, 0x01, 0x9a}, 1},
+		{"non-reference slice behind an AUD", []byte{0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x01, 0x9a}, 1},
+		{"reference slice", []byte{0, 0, 0, 1, 0x41, 0x9a}, 0},
+		{"key frame stays in the base layer", h264BaseKey, 0},
+		{"a frame with any reference slice stays", []byte{0, 0, 0, 1, 0x01, 0x9a, 0, 0, 0, 1, 0x41, 0x9a}, 0},
+		{"parameter sets alone are not a droppable frame", []byte{0, 0, 0, 1, 0x67, 0x42, 0xc0, 0x34, 0, 0, 0, 1, 0x68, 0xce}, 0},
+		{"SEI nal_ref_idc is always 0 and says nothing", []byte{0, 0, 0, 1, 0x06, 0x05, 0, 0, 0, 1, 0x41, 0x9a}, 0},
+	} {
+		if _, temporal := H264TemporalLayer(check.au); temporal != check.temporal {
+			t.Fatalf("%s: temporal %d, want %d", check.name, temporal, check.temporal)
+		}
+	}
+}
