@@ -339,9 +339,14 @@ bool TrySetU32(ICodecAPI* codec, const GUID& key, UINT32 value) {
   return holds;
 }
 
+UINT32 TemporalLayerCount(OutputKind kind, const VideoProfile& profile) {
+  return kind == OutputKind::h265 && profile.frame_rate >= 100 ? 2 : 1;
+}
+
 void ConfigureCodec(
     ICodecAPI* codec,
-    const VideoProfile& profile) {
+    const VideoProfile& profile,
+    OutputKind kind) {
   // Variable mode asks for peak-constrained VBR and falls back to CBR on an
   // encoder that refuses it; Constant mode is always CBR.
   if (profile.constant_bitrate ||
@@ -370,6 +375,11 @@ void ConfigureCodec(
   (void)TrySetU32(codec, CODECAPI_AVEncVideoMaxQP, VideoProfile::kMaxQuantizer);
   RequireProperty(codec, CODECAPI_AVEncVideoForceKeyFrame,
                   "codec-force-keyframe");
+  // Optional: an encoder without temporal layers still serves every viewer at
+  // the full rate; only the per-viewer cap then has nothing to drop.
+  if (const UINT32 layers = TemporalLayerCount(kind, profile); layers > 1) {
+    (void)TrySetU32(codec, CODECAPI_AVEncVideoTemporalLayerCount, layers);
+  }
 }
 
 ComPtr<IMFMediaType> CreateOutputType(
@@ -553,6 +563,21 @@ NalSummary InspectAnnexB(const std::vector<UINT8>& bytes) {
   return summary;
 }
 
+// "type/tid" per NAL unit, for diagnostics only.
+std::string DescribeHevcNals(const std::vector<UINT8>& bytes) {
+  std::string out;
+  for (auto current = FindStartCode(bytes, 0); current;) {
+    const size_t start = current->first + current->second;
+    const auto next = FindStartCode(bytes, start);
+    if (start + 1 < bytes.size()) {
+      if (!out.empty()) out += ' ';
+      out += std::to_string((bytes[start] >> 1) & 0x3f) + "/" + std::to_string((bytes[start + 1] & 0x07) - 1);
+    }
+    current = next;
+  }
+  return out;
+}
+
 HevcSummary InspectHevc(const std::vector<UINT8>& bytes) {
   HevcSummary summary;
   std::optional<std::pair<size_t, size_t>> current = FindStartCode(bytes, 0);
@@ -574,6 +599,9 @@ HevcSummary InspectHevc(const std::vector<UINT8>& bytes) {
     pps = pps || type == 34;
     summary.irap = summary.irap || (type >= 16 && type <= 21);
     summary.picture = summary.picture || type <= 21;
+    if (type <= 31) {
+      summary.temporal_id = std::max<UINT8>(summary.temporal_id, (bytes[nal_start + 1] & 0x07) - 1);
+    }
     current = next;
   }
   summary.parameter_sets = vps && sps && pps;
@@ -752,7 +780,7 @@ LiveEncoder::LiveEncoder(
       selected_(std::move(selected)), events_(selected_.events.Get()), profile_(profile), configured_(profile) {
   if (kind != OutputKind::h264 && !IsNewHardwareCodec(kind))
     Fail("mft-codec", "hardware encoder codec is unsupported");
-  ConfigureCodec(selected_.codec.Get(), profile_);
+  ConfigureCodec(selected_.codec.Get(), profile_, kind);
   ComPtr<IMFMediaType> output_type = CreateOutputType(profile_, kind);
   Check(selected_.transform->SetOutputType(0, output_type.Get(), 0),
         "mft-set-output-type");
@@ -841,8 +869,11 @@ EncodedAccessUnit LiveEncoder::Encode(
       }
       // A recovery point carries VPS/SPS/PPS with an IRAP picture.
       const bool key_frame = hevc.irap && hevc.parameter_sets;
-      if (force_key_frame && !key_frame) {
-        Fail("bitstream-recovery-unit", "requested live recovery unit lacks VPS, SPS, PPS, or IRAP");
+      // With temporal layers an enhancement slot cannot become a key frame; the
+      // encoder makes the next base-layer frame one, so the caller asks again.
+      if (force_key_frame && !key_frame && hevc.temporal_id == 0) {
+        Fail("bitstream-recovery-unit", "requested live recovery unit lacks VPS, SPS, PPS, or IRAP (NAL " +
+                                            DescribeHevcNals(bytes) + ")");
       }
       sequence_header_seen_ = sequence_header_seen_ || hevc.parameter_sets;
       if (!sequence_header_seen_) {

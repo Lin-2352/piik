@@ -193,6 +193,7 @@ struct HevcSummary final {
   bool parameter_sets = false;  // VPS, SPS and PPS all present
   bool irap = false;
   bool picture = false;
+  UINT8 temporal_id = 0;  // highest nuh_temporal_id of the picture's slices
 };
 
 struct ObuSummary final {
@@ -251,6 +252,10 @@ ComPtr<IMFSample> CreateSurfaceSample(ID3D11Texture2D* texture,
 NalSummary InspectAnnexB(const std::vector<UINT8>& bytes);
 ObuSummary InspectObus(const std::vector<UINT8>& bytes);
 HevcSummary InspectHevc(const std::vector<UINT8>& bytes);
+// Two temporal layers let the Host send a viewer that cannot decode the full
+// rate every other frame. Only HEVC carries the layer where the forwarder reads
+// it, and only a rate whose half stays smooth (>= 50 fps) is split.
+UINT32 TemporalLayerCount(OutputKind kind, const VideoProfile& profile);
 std::vector<UINT8> ReadSample(IMFSample* sample);
 
 struct EncodedAccessUnit final {

@@ -179,6 +179,21 @@ void CheckHevcInspection() {
   assert(!InspectHevc({0, 0, 0, 1, 0x40, 0x01}).picture);   // parameter sets alone
   assert(!InspectHevc({0, 0, 0, 1, 0xc0, 0x01}).annex_b);   // forbidden_zero_bit
   assert(!InspectHevc({0x12, 0x00}).annex_b);               // AV1 OBUs are not Annex B
+  // Temporal layers: NVENC's enhancement frame is AUD(35) + TSA_N(2), both TID 1.
+  assert(summary.temporal_id == 0 && delta.temporal_id == 0);
+  const auto enhancement = InspectHevc({0, 0, 0, 1, 0x46, 0x02, 0x50, 0, 0, 0, 1, 0x04, 0x02, 0xee});
+  assert(enhancement.picture && !enhancement.irap && enhancement.temporal_id == 1);
+}
+
+// Two temporal layers only where halving still leaves smooth motion (>= 50 fps)
+// and the viewer cap can read them (LiveKit parses the HEVC temporal id).
+void CheckTemporalLayers() {
+  assert(TemporalLayerCount(OutputKind::h265, VideoProfile{2560, 1600, 120}) == 2);
+  assert(TemporalLayerCount(OutputKind::h265, VideoProfile{2560, 1600, 100}) == 2);
+  assert(TemporalLayerCount(OutputKind::h265, VideoProfile{2560, 1600, 90}) == 1);
+  assert(TemporalLayerCount(OutputKind::h265, VideoProfile{2560, 1600, 60}) == 1);
+  assert(TemporalLayerCount(OutputKind::h264, VideoProfile{2560, 1600, 120}) == 1);
+  assert(TemporalLayerCount(OutputKind::av1, VideoProfile{2560, 1600, 120}) == 1);
 }
 
 void CheckEncoderCandidates() {
@@ -320,6 +335,7 @@ void CheckSurfaceSample(ID3D11Device* device) {
 }
 
 int main() {
+  CheckTemporalLayers();
   VideoProfile profile{2560, 1440, 60, 12'000'000};
   ValidateVideoProfile(profile);
   assert(profile.h264_level() == 51 && profile.profile_level_id() == "42c033");
