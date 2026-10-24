@@ -15,6 +15,10 @@ export interface FrameRateCapState {
   // The previous window lost packets: the decoder may still be waiting for a
   // key frame, which looks like a stall but is the network's doing.
   recovering?: boolean;
+  // Windows judged so far: the first few after a join (or a frame-rate change
+  // that makes the policy apply) are decoder warm-up. Counted here, not taken
+  // from the wire: a stalled viewer's reporter restarts its sequence at zero.
+  seen?: number;
 }
 
 export const INITIAL_FRAME_RATE_CAP: FrameRateCapState = { behind: 0, capped: false };
@@ -36,19 +40,22 @@ export function nextFrameRateCap(
     framesReceivedDelta?: number | null;
     framesDecodedDelta: number | null;
     packetsLostDelta?: number | null;
-    sequence?: number;
     windowMs?: number;
   },
   shareFramerate: number,
 ): FrameRateCapState {
-  if (state.capped || shareFramerate / 2 < MIN_CAPPED_FRAMERATE) return state;
-  if ((metrics.sequence ?? WARMUP_WINDOWS) < WARMUP_WINDOWS) return state;
+  if (state.capped) return state;
+  // Below the rate where halving stays smooth nothing is judged; the encoder
+  // runs one layer there, so coming back up is a fresh start.
+  if (shareFramerate / 2 < MIN_CAPPED_FRAMERATE) return INITIAL_FRAME_RATE_CAP;
+  const seen = (state.seen ?? 0) + 1;
+  if (seen <= WARMUP_WINDOWS) return { ...state, seen };
   const received = metrics.framesReceivedDelta ?? null;
   const decoded = metrics.framesDecodedDelta;
   const lossy = (metrics.packetsLostDelta ?? 0) > 0;
   if (received === null || decoded === null || received < MIN_WINDOW_FRAMES) {
     // A blackout delivers almost nothing; it still marks the recovery after it.
-    return lossy ? { ...state, recovering: true } : state;
+    return lossy ? { ...state, seen, recovering: true } : { ...state, seen };
   }
   // What a healthy decoder could have decoded: no more than the stream carried
   // and no more than actually arrived (a network shortfall is not its fault).
@@ -58,13 +65,11 @@ export function nextFrameRateCap(
   // burst and its key-frame wait, not the decoder: those windows only count as
   // falling behind.
   if (!lossy && !state.recovering && decoded < available * STALLED_RATIO) {
-    return { behind: 0, capped: true };
+    return { behind: 0, capped: true, seen };
   }
   if (decoded >= available * BEHIND_RATIO) {
-    return state.behind === 0 && !lossy && !state.recovering
-      ? state
-      : { behind: 0, capped: false, ...(lossy ? { recovering: true } : {}) };
+    return { behind: 0, capped: false, seen, ...(lossy ? { recovering: true } : {}) };
   }
   const behind = state.behind + 1;
-  return { behind, capped: behind >= BEHIND_WINDOWS, ...(lossy ? { recovering: true } : {}) };
+  return { behind, capped: behind >= BEHIND_WINDOWS, seen, ...(lossy ? { recovering: true } : {}) };
 }

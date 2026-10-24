@@ -1285,11 +1285,12 @@ export function HostPage({
         evidence,
       ),
     );
-    if (peer instanceof NativeSenderPeer) {
+    // Only a viewer fed by this Host's own edge says anything about that edge.
+    if (evidenceSource === "direct" && peer instanceof NativeSenderPeer) {
       const previous = frameRateCapsRef.current.get(peer) ?? INITIAL_FRAME_RATE_CAP;
       const next = nextFrameRateCap(
         previous,
-        { ...evidence.metrics, sequence: evidence.sequence, windowMs: evidence.windowMs },
+        { ...evidence.metrics, windowMs: evidence.windowMs },
         qualitySettingsRef.current.maxFramerate,
       );
       frameRateCapsRef.current.set(peer, next);

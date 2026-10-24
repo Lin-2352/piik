@@ -437,6 +437,24 @@
       "valid": true
     },
     {
+      "name": "viewer-quality-evidence-receive-counters",
+      "schema": "client",
+      "json": "{\"type\":\"viewer-quality-evidence\",\"guard\":{\"connectionId\":\"connection_12345678\",\"routeRevision\":0,\"presentationEpoch\":0},\"sequence\":0,\"windowMs\":2000,\"metrics\":{\"natTraversalPath\":\"ordinary\",\"width\":1920,\"height\":1080,\"framesPerSecond\":59.8,\"bitrateKbps\":7500,\"packetsReceivedDelta\":1500,\"packetsLostDelta\":2,\"rttMs\":18,\"jitterMs\":3.5,\"framesDecodedDelta\":120,\"framesDroppedDelta\":1,\"decodeMsPerFrame\":2.4,\"freezeCountDelta\":0,\"freezeDurationMsDelta\":0,\"pauseCountDelta\":0,\"pauseDurationMsDelta\":0,\"codec\":\"video/H264\",\"codecProfile\":\"profile-level-id=42e01f\",\"codecParameters\":\"packetization-mode=1; level-asymmetry-allowed=1\",\"audioBitrateKbps\":192,\"audioPacketLossPercent\":0.2,\"audioJitterMs\":2.5,\"audioVideoPlayoutDeltaMs\":-12.5,\"videoJitterBufferDelayMs\":24,\"audioJitterBufferDelayMs\":18,\"audioConcealedSamplesPercent\":1,\"audioConcealmentEventsDelta\":3,\"audioCodec\":\"audio/opus\",\"framesReceivedDelta\":120,\"keyFramesDecodedDelta\":1,\"pliCountDelta\":2,\"nackCountDelta\":3,\"powerEfficientDecoder\":true}}",
+      "valid": true
+    },
+    {
+      "name": "viewer-quality-evidence-receive-counters-null",
+      "schema": "client",
+      "json": "{\"type\":\"viewer-quality-evidence\",\"guard\":{\"connectionId\":\"connection_12345678\",\"routeRevision\":0,\"presentationEpoch\":0},\"sequence\":0,\"windowMs\":2000,\"metrics\":{\"natTraversalPath\":\"ordinary\",\"width\":1920,\"height\":1080,\"framesPerSecond\":59.8,\"bitrateKbps\":7500,\"packetsReceivedDelta\":1500,\"packetsLostDelta\":2,\"rttMs\":18,\"jitterMs\":3.5,\"framesDecodedDelta\":120,\"framesDroppedDelta\":1,\"decodeMsPerFrame\":2.4,\"freezeCountDelta\":0,\"freezeDurationMsDelta\":0,\"pauseCountDelta\":0,\"pauseDurationMsDelta\":0,\"codec\":\"video/H264\",\"codecProfile\":\"profile-level-id=42e01f\",\"codecParameters\":\"packetization-mode=1; level-asymmetry-allowed=1\",\"audioBitrateKbps\":192,\"audioPacketLossPercent\":0.2,\"audioJitterMs\":2.5,\"audioVideoPlayoutDeltaMs\":-12.5,\"videoJitterBufferDelayMs\":24,\"audioJitterBufferDelayMs\":18,\"audioConcealedSamplesPercent\":1,\"audioConcealmentEventsDelta\":3,\"audioCodec\":\"audio/opus\",\"framesReceivedDelta\":null,\"powerEfficientDecoder\":null}}",
+      "valid": true
+    },
+    {
+      "name": "viewer-quality-evidence-negative-counter",
+      "schema": "client",
+      "json": "{\"type\":\"viewer-quality-evidence\",\"guard\":{\"connectionId\":\"connection_12345678\",\"routeRevision\":0,\"presentationEpoch\":0},\"sequence\":0,\"windowMs\":2000,\"metrics\":{\"natTraversalPath\":\"ordinary\",\"width\":1920,\"height\":1080,\"framesPerSecond\":59.8,\"bitrateKbps\":7500,\"packetsReceivedDelta\":1500,\"packetsLostDelta\":2,\"rttMs\":18,\"jitterMs\":3.5,\"framesDecodedDelta\":120,\"framesDroppedDelta\":1,\"decodeMsPerFrame\":2.4,\"freezeCountDelta\":0,\"freezeDurationMsDelta\":0,\"pauseCountDelta\":0,\"pauseDurationMsDelta\":0,\"codec\":\"video/H264\",\"codecProfile\":\"profile-level-id=42e01f\",\"codecParameters\":\"packetization-mode=1; level-asymmetry-allowed=1\",\"audioBitrateKbps\":192,\"audioPacketLossPercent\":0.2,\"audioJitterMs\":2.5,\"audioVideoPlayoutDeltaMs\":-12.5,\"videoJitterBufferDelayMs\":24,\"audioJitterBufferDelayMs\":18,\"audioConcealedSamplesPercent\":1,\"audioConcealmentEventsDelta\":3,\"audioCodec\":\"audio/opus\",\"pliCountDelta\":-1}}",
+      "valid": false
+    },
+    {
       "name": "viewer-quality-evidence-null-freeze",
       "schema": "client",
       "json": "{\"type\":\"viewer-quality-evidence\",\"guard\":{\"connectionId\":\"connection_12345678\",\"routeRevision\":0,\"presentationEpoch\":0},\"sequence\":0,\"windowMs\":2000,\"metrics\":{\"natTraversalPath\":\"ordinary\",\"width\":1920,\"height\":1080,\"framesPerSecond\":59.8,\"bitrateKbps\":7500,\"packetsReceivedDelta\":1500,\"packetsLostDelta\":2,\"rttMs\":18,\"jitterMs\":3.5,\"framesDecodedDelta\":120,\"framesDroppedDelta\":1,\"decodeMsPerFrame\":2.4,\"freezeCountDelta\":null,\"freezeDurationMsDelta\":null,\"pauseCountDelta\":null,\"pauseDurationMsDelta\":null,\"codec\":\"video/H264\",\"codecProfile\":\"profile-level-id=42e01f\",\"codecParameters\":\"packetization-mode=1; level-asymmetry-allowed=1\",\"audioBitrateKbps\":192,\"audioPacketLossPercent\":0.2,\"audioJitterMs\":2.5,\"audioVideoPlayoutDeltaMs\":-12.5,\"videoJitterBufferDelayMs\":24,\"audioJitterBufferDelayMs\":18,\"audioConcealedSamplesPercent\":1,\"audioConcealmentEventsDelta\":3,\"audioCodec\":\"audio/opus\"}}",
