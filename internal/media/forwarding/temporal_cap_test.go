@@ -116,3 +116,43 @@ func TestTemporalCapNumbersEachLayerIndependently(t *testing.T) {
 		t.Fatalf("layer 1 renumbered to %d, want 1", out.ExtSequenceNumber)
 	}
 }
+
+// A capped viewer sees ~4,000 packets/s at 120 fps; the cap sits on that path.
+func BenchmarkTemporalCapAdmit(b *testing.B) {
+	for _, capped := range []bool{false, true} {
+		name := "uncapped"
+		if capped {
+			name = "capped"
+		}
+		b.Run(name, func(b *testing.B) {
+			var cap temporalCap
+			if capped {
+				cap.limit(0)
+			}
+			packets := [4]*buffer.ExtPacket{}
+			for i := range packets {
+				packets[i] = capPacket(0, int32(i%2), i%2 == 1)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; b.Loop(); i++ {
+				packet := packets[i%4]
+				packet.ExtSequenceNumber = uint64(i)
+				cap.admit(packet, 1)
+			}
+		})
+	}
+}
+
+func BenchmarkTemporalCapOriginal(b *testing.B) {
+	var cap temporalCap
+	cap.limit(0)
+	for i := uint64(0); i < 20000; i++ {
+		cap.admit(capPacket(i, int32(i%2), true), 1)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; b.Loop(); i++ {
+		cap.original(1, uint64(i%10000))
+	}
+}
