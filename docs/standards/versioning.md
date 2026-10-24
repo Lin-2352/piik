@@ -172,7 +172,7 @@ introduced by this policy.
 
 ## Container Distribution
 
-`ghcr.io/tntcrafthim/piik` wraps the same verified linux/amd64 and linux/arm64
+`ghcr.io/lin-2352/piik` wraps the same verified linux/amd64 and linux/arm64
 Server archives as the GitHub release. The packager's optional
 `--container-image <tag>` builds from that architecture's extraction;
 CI checks its Compose recipe on the matching native runner and transfers the verified image
@@ -253,34 +253,20 @@ commit is not the Piik source revision; release metadata retains the original
 GitHub SHA. Build each target once and copy the same archives, notices,
 version, full source SHA and artifact hashes to both. A Git repository mirror
 alone does not synchronize Release attachments. Keep one release description.
-Update detection reads each provider's API metadata; it does not parse the public
-changelog or download build descriptors. The existing pipeline owns local
-machine-readable build metadata.
-
-The two providers only adapt API fields and download locations into the same
-release model. Share version comparison, channel filtering and package validation.
-The normal background check tries GitHub, then Gitee if the primary is unavailable;
-download links may expose both verified locations. A lagging mirror must not
-cause a downgrade or a version/hash disagreement to be silently accepted.
-Gitee's documented latest endpoint means last updated, so provider normalization
-must select stable release precedence explicitly, not equate provider ordering.
+The App and Server never check for updates themselves; the existing pipeline owns
+local machine-readable build metadata.
 
 Synchronize only an explicitly published release; branch pushes stay quiet.
 Retrying a failed mirror upload reuses the original package. Advertise a mirrored
 package as available only after its required attachments and matching metadata
 are present. Tokens belong only to publishing, never the distributed Browser/App.
-The public mirror is [TNTcraftHIM/Piik](https://gitee.com/TNTcraftHIM/Piik).
+The mirror repository is configured by the maintainer (`GITEE_REPOSITORY`).
 The publisher reuses the shared artifact validator, checks every public package
 against GitHub's published asset digest, then uploads and verifies anonymous
 Gitee downloads. Gitee has no draft API: an incomplete mirror remains a preview
 release, and becomes stable only after every file passes. A source marker in
 the release body (`<!-- piik-source: <full-SHA> -->`) preserves the GitHub revision;
 the mirror's `target_commitish` identifies only its own README commit.
-App notices and the operator check share their existing version comparison
-across providers. Each provider has its own deadline; the mirror checks at most
-ten pages of 100 releases and rejects an incomplete listing. An explicit operator
-`--api-url` override checks that endpoint alone. A valid primary result, including
-an up-to-date result, does not consult the mirror.
 
 Gitee currently documents 100 MB per attachment and 1 GB total repository
 attachments for ordinary projects. The mirror rejects files above 100,000,000
@@ -296,8 +282,6 @@ retained stable versions; never delete either retained version to make an
 unverified replacement fit. Exhausted storage leaves a pending preview.
 Target authentication, uploads, anonymous metadata/CORS and the complete matching
 Server/three-platform App downloads and SHA-256 checks passed for the public release.
-Use API metadata in the Browser; ordinary asset-link redirects are not guaranteed
-to permit cross-origin fetch, even when a normal download works.
 
 ## Public Release Baseline
 
