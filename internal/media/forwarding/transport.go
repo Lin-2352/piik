@@ -41,6 +41,7 @@ type TransportOptions struct {
 // Transport is outgoing-only. Its caller owns signaling, ICE events and the
 // shared UDP mux. Video RTCP is callback-driven; never read VideoSender's RTCP.
 type Transport struct {
+	activity     activityGate // rate-limits probe-driver evaluation per packet
 	PC           *webrtc.PeerConnection
 	Output       *Output
 	VideoSender  *webrtc.RTPSender
@@ -444,6 +445,9 @@ func (*Transport) OnStreamStarted(time.Duration)               {}
 // specific language governing permissions and limitations under the License.
 
 func (transport *Transport) mediaActivity() {
+	if !transport.activity.due(time.Now(), probeDriveInterval) {
+		return
+	}
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
 	transport.driveProbeLocked()
@@ -758,4 +762,19 @@ func (hold *budgetHold) apply(estimate int64, now time.Time) int64 {
 		}
 	}
 	return hold.value
+}
+
+// probeDriveInterval bounds how often media activity re-evaluates the probe
+// driver. Activity arrives with every outgoing packet (thousands a second), and
+// each evaluation copies layer tables under the transport lock; the library
+// itself polls on a timer. A probe's start, goal and duration are all far
+// coarser than this.
+const probeDriveInterval = 10 * time.Millisecond
+
+// activityGate admits at most one caller per interval, lock-free.
+type activityGate struct{ last atomic.Int64 }
+
+func (gate *activityGate) due(now time.Time, every time.Duration) bool {
+	at, previous := now.UnixNano(), gate.last.Load()
+	return at-previous >= int64(every) && gate.last.CompareAndSwap(previous, at)
 }
