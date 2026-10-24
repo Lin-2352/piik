@@ -4,10 +4,11 @@ import {
   nextFrameRateCap,
 } from "../src/client/media/frame-rate-cap";
 
-const window = (received: number | null, decoded: number | null, dropped = 0) => ({
+const window = (received: number | null, decoded: number | null, dropped = 0, lost = 0) => ({
   framesReceivedDelta: received,
   framesDecodedDelta: decoded,
   framesDroppedDelta: dropped,
+  packetsLostDelta: lost,
 });
 
 describe("per-viewer frame-rate cap", () => {
@@ -45,5 +46,12 @@ describe("per-viewer frame-rate cap", () => {
   it("ignores windows without receive counters or with too few frames", () => {
     expect(nextFrameRateCap(INITIAL_FRAME_RATE_CAP, window(null, 0), 120)).toEqual(INITIAL_FRAME_RATE_CAP);
     expect(nextFrameRateCap(INITIAL_FRAME_RATE_CAP, window(4, 0), 120)).toEqual(INITIAL_FRAME_RATE_CAP);
+  });
+
+  it("does not cap at once on a lossy window: undecodable frames there are a network burst", () => {
+    const burst = nextFrameRateCap(INITIAL_FRAME_RATE_CAP, window(240, 0, 0, 40), 120);
+    expect(burst.capped).toBe(false);
+    // Recovered decoding after the burst forgets it.
+    expect(nextFrameRateCap(burst, window(240, 240), 120)).toEqual(INITIAL_FRAME_RATE_CAP);
   });
 });

@@ -24,6 +24,7 @@ export function nextFrameRateCap(
     framesReceivedDelta?: number | null;
     framesDecodedDelta: number | null;
     framesDroppedDelta: number | null;
+    packetsLostDelta?: number | null;
   },
   shareFramerate: number,
 ): FrameRateCapState {
@@ -31,7 +32,10 @@ export function nextFrameRateCap(
   const received = metrics.framesReceivedDelta ?? null;
   const decoded = metrics.framesDecodedDelta;
   if (received === null || decoded === null || received < MIN_WINDOW_FRAMES) return state;
-  if (decoded < received * COLLAPSED_RATIO) return { behind: 0, capped: true };
+  // Undecodable frames in a lossy window are a network burst, not the decoder:
+  // that window only counts as falling behind.
+  const lossFree = (metrics.packetsLostDelta ?? 0) === 0;
+  if (lossFree && decoded < received * COLLAPSED_RATIO) return { behind: 0, capped: true };
   const dropped = metrics.framesDroppedDelta ?? 0;
   if (decoded >= received * BEHIND_RATIO && dropped <= received * DROPPED_RATIO) {
     return state.behind === 0 ? state : INITIAL_FRAME_RATE_CAP;
