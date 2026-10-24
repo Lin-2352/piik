@@ -83,6 +83,8 @@ type NativeMediaCapabilities struct {
 	HardwareHEVC          bool `json:"hardwareHEVC,omitempty"`
 	// HostSettings: the control session remembers Host settings and presets.
 	HostSettings bool `json:"hostSettings,omitempty"`
+	// FrameRateCap: the control session accepts cap-edge-frame-rate.
+	FrameRateCap bool `json:"frameRateCap,omitempty"`
 }
 
 type Server struct {

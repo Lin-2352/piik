@@ -370,11 +370,11 @@ describe("native App private wire", () => {
     })).toEqual({
       ...health, nativeMedia: {
         receiverReuse: false,
-        video: true, processAudio: false, processAudioExclusion: false, systemAudio: false, microphone: false, captureBorderControl: false, bitrateModeControl: false, hardwareH264: false, softwareVP8: false, hardwareAV1: false, hardwareHEVC: false, hostSettings: false,
+        video: true, processAudio: false, processAudioExclusion: false, systemAudio: false, microphone: false, captureBorderControl: false, bitrateModeControl: false, hardwareH264: false, softwareVP8: false, hardwareAV1: false, hardwareHEVC: false, hostSettings: false, frameRateCap: false,
       },
     });
     expect(nativeHealthSchema.parse({ ...health, nativeMedia: undefined }).nativeMedia)
-      .toEqual({ receiverReuse: false, video: false, processAudio: false, processAudioExclusion: false, systemAudio: false, microphone: false, captureBorderControl: false, bitrateModeControl: false, hardwareH264: false, softwareVP8: false, hardwareAV1: false, hardwareHEVC: false, hostSettings: false });
+      .toEqual({ receiverReuse: false, video: false, processAudio: false, processAudioExclusion: false, systemAudio: false, microphone: false, captureBorderControl: false, bitrateModeControl: false, hardwareH264: false, softwareVP8: false, hardwareAV1: false, hardwareHEVC: false, hostSettings: false, frameRateCap: false });
     for (const invalid of [
       { protocol: 0 }, { protocol: 9.5 }, { protocol: Number.MAX_SAFE_INTEGER + 1 },
       { service: "other" }, { port: NATIVE_CLIENT_PORT_END + 1 }, { instanceToken: "short" },
@@ -434,6 +434,49 @@ describe("native App private wire", () => {
           version: NATIVE_CLIENT_PROTOCOL, id: expect.any(String), type: "replace-share-source",
           shareId: input.shareId, source: input.source, audio: true, adapterIndex: 0, encoderIndex: 0, ...extension,
         });
+      }
+    } finally { client!.close(); }
+  });
+
+  // An older App closes the whole control channel on a request it does not know,
+  // which would end the share for every viewer: ask only when it advertises it.
+  it.each([undefined, false, true])("sends the frame-rate cap only to an App that advertises it: %s", async (supported) => {
+    const requests: Record<string, unknown>[] = [];
+    class Socket extends EventTarget {
+      static readonly OPEN = 1;
+      static readonly CLOSING = 2;
+      readyState = Socket.OPEN;
+      protocol = `piik-client-v9.${health.instanceToken}`;
+      constructor() { super(); queueMicrotask(() => this.dispatchEvent(new Event("open"))); }
+      close() { this.readyState = Socket.CLOSING; }
+      send(payload: string) {
+        const request = JSON.parse(payload) as Record<string, unknown>;
+        requests.push(request);
+        queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", {
+          data: JSON.stringify({
+            version: NATIVE_CLIENT_PROTOCOL, id: request.id,
+            type: request.type === "hello" ? "ready" : "edge-frame-rate-capped",
+          }),
+        })));
+      }
+    }
+    vi.stubGlobal("WebSocket", Socket);
+    vi.stubGlobal("window", { setTimeout, clearTimeout });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      ...health, nativeMedia: { ...health.nativeMedia, frameRateCap: supported },
+    }))));
+    const client = await NativeClient.connect();
+    expect(client).not.toBeNull();
+    try {
+      await client!.capEdgeFrameRate("share_123456", "edge_12345678", true);
+      const sent = requests.filter((request) => request.type === "cap-edge-frame-rate");
+      if (supported) {
+        expect(sent).toEqual([{
+          version: NATIVE_CLIENT_PROTOCOL, id: expect.any(String), type: "cap-edge-frame-rate",
+          shareId: "share_123456", connectionId: "edge_12345678", capped: true,
+        }]);
+      } else {
+        expect(sent).toEqual([]);
       }
     } finally { client!.close(); }
   });

@@ -634,6 +634,7 @@ export class NativeClient {
   }
 
   async capEdgeFrameRate(shareId: string, connectionId: string, capped: boolean): Promise<void> {
+    if (!this.health.nativeMedia.frameRateCap) return;
     await this.request(
       "cap-edge-frame-rate",
       { shareId, connectionId, capped },
