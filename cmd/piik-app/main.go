@@ -11,9 +11,11 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/TNTcraftHIM/Piik/internal/app"
+	"github.com/TNTcraftHIM/Piik/internal/app/config"
 	"github.com/TNTcraftHIM/Piik/internal/app/payload"
 )
 
@@ -50,6 +52,19 @@ func run(args []string) int {
 		return 2
 	}
 	options.DisableBrowser = os.Getenv("PIIK_CLIENT_GATE_NO_BROWSER") == "true"
+	// A standalone build keeps its settings and presets beside itself so the
+	// folder is portable; --config still chooses another file.
+	if options.ConfigPath == "" && payload.Standalone() {
+		if executable, err := os.Executable(); err == nil {
+			if legacy, legacyErr := config.DefaultPath(); legacyErr == nil {
+				if path, portableErr := payload.PortableConfig(filepath.Join(filepath.Dir(executable), "piik-data"), legacy); portableErr == nil {
+					options.ConfigPath = path
+				} else {
+					fmt.Fprintln(os.Stderr, "Piik: could not use a settings folder beside the exe, using your user settings:", portableErr)
+				}
+			}
+		}
+	}
 	// A standalone build carries its helper programs and unpacks them beside
 	// itself; explicit helper paths always win, and an ordinary build does nothing.
 	if options.CaptureProcess == "" && options.TunnelProcess == "" {

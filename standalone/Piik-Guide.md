@@ -52,10 +52,15 @@ Run from a terminal, for example `Piik.exe --link`.
   them; a new `Piik.exe` replaces them automatically. If the folder is
   read-only, Piik prints a warning and the share features that need the helpers
   will not work, so keep the exe somewhere writable.
-- **Settings and remembered choices:** `%APPDATA%\Piik`.
+- **Settings, presets and remembered choices:** in a `piik-data` folder **next to
+  `Piik.exe`**, so they move with the folder. The first time, anything already
+  saved in `%APPDATA%\Piik` (including a saved Site address or access password,
+  if you set one) is copied in once; after that the two are independent. Pass
+  `--config <file>` to keep them somewhere else.
 - **Diagnostics:** only with `--debug`, in the folder you choose.
-- **Moving or removing Piik:** move or delete `Piik.exe` and its `runtime`
-  folder. Delete `%APPDATA%\Piik` as well to forget settings.
+- **Moving or removing Piik:** move or delete the whole folder (`Piik.exe`,
+  `runtime` and `piik-data`). Nothing else is left behind, except the older
+  `%APPDATA%\Piik` copy if you ever used a non-standalone build.
 
 ## Picture and encoder settings
 
