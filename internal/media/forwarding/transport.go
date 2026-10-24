@@ -565,6 +565,15 @@ type boundedPacer struct {
 	bytes   atomic.Uint64
 	dropped atomic.Uint64
 	last    atomic.Int64
+	// Diagnostic lines are rate limited to one per second each.
+	overflowLogged, slowLogged atomic.Int64
+}
+
+// noteDiagnostic reports whether a diagnostic line may be written now.
+func (queue *boundedPacer) noteDiagnostic(last *atomic.Int64) bool {
+	now := time.Now().UnixNano()
+	previous := last.Load()
+	return now-previous >= int64(time.Second) && last.CompareAndSwap(previous, now)
 }
 
 func newBoundedPacer(packetPacer pacer.Pacer, log logger.Logger, limit int) *boundedPacer {
@@ -581,8 +590,11 @@ func (queue *boundedPacer) SetBitrate(bitrate int) {
 func (queue *boundedPacer) Enqueue(packet *pacer.Packet) {
 	queue.mu.Lock()
 	if queue.closed || len(queue.pending) >= queue.limit {
+		depth := len(queue.pending)
 		queue.mu.Unlock()
-		queue.dropped.Add(1)
+		if queue.dropped.Add(1) == 1 || queue.noteDiagnostic(&queue.overflowLogged) {
+			slog.Debug("pacer-overflow", "pending", depth, "limit", queue.limit, "dropped", queue.dropped.Load())
+		}
 		queue.discard(packet)
 		return
 	}
@@ -691,7 +703,11 @@ func (ticket *pacedPacket) WriteRTP(*rtp.Header, []byte) (int, error) {
 	if packet == nil {
 		return 0, io.ErrClosedPipe
 	}
+	started := time.Now()
 	written, err := queue.sender.SendPacket(packet)
+	if elapsed := time.Since(started); elapsed > 20*time.Millisecond && queue.noteDiagnostic(&queue.slowLogged) {
+		slog.Debug("pacer-slow-send", "ms", elapsed.Milliseconds(), "pending", queue.pendingCount())
+	}
 	if err == nil && written > 0 {
 		queue.packets.Add(1)
 		queue.bytes.Add(uint64(written))
