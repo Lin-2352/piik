@@ -142,14 +142,17 @@ A viewer whose browser cannot present the full frame rate gets half of it, decid
 per viewer and kept for that connection. Chrome on Android (measured on a
 Dimensity 8100 phone) holds 90 fps but, fed 120 fps, discards every decoded frame
 ("too many frames backed up in the decoder") until the rate drops, then needs about
-10 s to recover. Native H.265 shares at 100 fps or more therefore encode two temporal
-layers (enhancement frames are non-reference TSA_N); a native App Host caps a viewer
-whose quality evidence shows it decoding less than half of what arrives, or falling
-behind for two windows, via `cap-edge-frame-rate`. The forwarding output drops that
-viewer's enhancement layer and renumbers the rest, so its sequence stays gap-free and
-NACKs still resolve. A request for a key frame that lands on an enhancement slot is
-carried to the next base-layer frame. The cap never halves below 50 fps; H.264 has no
-temporal layer the forwarder can read, so H.264 viewers are not capped.
+10 s to recover. Native H.265 and H.264 shares at 100 fps or more therefore encode
+two temporal layers; enhancement frames are non-reference (HEVC TSA_N; H.264 slices
+with nal_ref_idc 0 after an SVC prefix NAL). A native App Host caps a viewer whose
+quality evidence shows it decoding less than half of what arrives in a loss-free
+window, or falling behind for two windows, via `cap-edge-frame-rate`. The forwarding
+output drops that viewer's enhancement layer and renumbers the rest, so its sequence
+stays gap-free and NACKs still resolve. LiveKit reads the HEVC layer from the NAL
+header; for H.264 the encoded source records each frame's layer from its prefix NAL
+and strips the prefix, so receivers get plain AVC. A request for a key frame that
+lands on an enhancement slot is carried to the next base-layer frame. The cap never
+halves below 50 fps.
 Native H264 retains Constrained Baseline. Capture validates the coding-tool subset under
 RFC 6184, including equivalent Constrained Baseline constraint bytes, and reports
 the actual SPS profile/level; one vendor's byte spelling is not the contract.

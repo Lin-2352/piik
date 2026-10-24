@@ -46,6 +46,12 @@ func (cap *temporalCap) reset() {
 }
 
 func (cap *temporalCap) admit(packet *buffer.ExtPacket, layer int32) (*buffer.ExtPacket, bool) {
+	return cap.admitTemporal(packet, layer, packet.Temporal)
+}
+
+// admitTemporal admits a packet whose frame belongs to the given temporal
+// layer; H.264 frames carry it outside the packet (see Source.FrameTemporal).
+func (cap *temporalCap) admitTemporal(packet *buffer.ExtPacket, layer, temporal int32) (*buffer.ExtPacket, bool) {
 	cap.mu.Lock()
 	defer cap.mu.Unlock()
 	if cap.layers == nil {
@@ -60,7 +66,7 @@ func (cap *temporalCap) admit(packet *buffer.ExtPacket, layer int32) (*buffer.Ex
 		state.max = cap.pending
 	}
 	state.midFrame = !packet.Packet.Marker
-	if state.max >= 0 && packet.Temporal > state.max {
+	if state.max >= 0 && temporal > state.max {
 		state.dropped++
 		return packet, false
 	}

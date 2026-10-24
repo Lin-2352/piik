@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TNTcraftHIM/Piik/internal/media/encoded"
 	"github.com/livekit/livekit-server/pkg/sfu"
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
@@ -207,5 +208,115 @@ func TestCappedTransportForwardsOnlyH265BaseLayerWithoutGaps(t *testing.T) {
 	}
 	if enhancement.Load() != 0 || gaps.Load() != 0 {
 		t.Fatalf("capped viewer got %d enhancement packets and %d sequence gaps", enhancement.Load(), gaps.Load())
+	}
+}
+
+// The same cap for native H.264: LiveKit reads no temporal layer from H.264, so
+// the encoded source classifies each access unit from its SVC prefix NAL, strips
+// the prefix, and the capped viewer receives only base frames without gaps.
+func TestCappedTransportForwardsOnlyH264BaseLayerWithoutGaps(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	check := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	codec := webrtc.RTPCodecParameters{RTPCodecCapability: webrtc.RTPCodecCapability{
+		MimeType: webrtc.MimeTypeH264, ClockRate: 90_000,
+		SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+	}, PayloadType: 96}
+	input, err := NewEncodedSource(SourceOptions{ID: "screen", StreamID: "capped-h264", Codec: codec,
+		Formats: []LayerFormat{{Width: 2, Height: 2, Bitrate: 300_000}}})
+	check(err)
+	defer input.Close()
+	settings := webrtc.SettingEngine{}
+	settings.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
+	settings.SetIncludeLoopbackCandidate(true)
+	settings.SetIPFilter(func(ip net.IP) bool { return ip.IsLoopback() })
+	transport, err := NewTransport(TransportOptions{Source: input.Source, Settings: settings, ConnectionID: "phone", InitialBitrate: 1_000_000})
+	check(err)
+	defer transport.Close()
+	transport.Output.CapTemporalLayer(0)
+	receiver, err := webrtc.NewAPI(webrtc.WithSettingEngine(settings)).NewPeerConnection(webrtc.Configuration{})
+	check(err)
+	defer receiver.Close()
+	var base, enhancement, prefixes, gaps atomic.Uint32
+	receiver.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		last := -1
+		for {
+			packet, _, err := track.ReadRTP()
+			if err != nil {
+				return
+			}
+			if len(packet.Payload) == 0 {
+				continue
+			}
+			if last >= 0 && packet.SequenceNumber != uint16(last+1) {
+				gaps.Add(1)
+			}
+			last = int(packet.SequenceNumber)
+			switch nal := packet.Payload[0]; {
+			case nal&0x1f == 14:
+				prefixes.Add(1)
+			case nal&0x1f == 1 && nal&0x60 == 0:
+				enhancement.Add(1)
+			case nal&0x1f == 1 || nal&0x1f == 5:
+				base.Add(1)
+			}
+		}
+	})
+	offer, err := transport.PC.CreateOffer(nil)
+	check(err)
+	gather := webrtc.GatheringCompletePromise(transport.PC)
+	check(transport.PC.SetLocalDescription(offer))
+	<-gather
+	check(receiver.SetRemoteDescription(*transport.PC.LocalDescription()))
+	answer, err := receiver.CreateAnswer(nil)
+	check(err)
+	gather = webrtc.GatheringCompletePromise(receiver)
+	check(receiver.SetLocalDescription(answer))
+	<-gather
+	check(transport.PC.SetRemoteDescription(*receiver.LocalDescription()))
+	for transport.PC.ConnectionState() != webrtc.PeerConnectionStateConnected {
+		select {
+		case <-time.After(5 * time.Millisecond):
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	}
+	check(transport.SetConnected())
+	nal := func(units ...[]byte) []byte {
+		var au []byte
+		for _, unit := range units {
+			au = append(append(au, 0, 0, 0, 1), unit...)
+		}
+		return au
+	}
+	prefix := func(tid byte) []byte { return []byte{0x6e, 0xc0, 0x80, tid<<5 | 0x07} }
+	period := time.Second / 120
+	for frame := 0; base.Load() < 12; frame++ {
+		// Every eighth frame is a key frame; odd frames are the non-reference
+		// enhancement layer (prefix temporal_id 1, nal_ref_idc 0).
+		au := nal(prefix(0), []byte{0x41, 0x9a, 0x02})
+		switch {
+		case frame%8 == 0:
+			au = nal(sfu.H264KeyFrame2x2SPS, sfu.H264KeyFrame2x2PPS, prefix(0), sfu.H264KeyFrame2x2IDR)
+		case frame%2 == 1:
+			au = nal(append([]byte{0x0e}, prefix(1)[1:]...), []byte{0x01, 0x9a, 0x02})
+		}
+		pts := time.Duration(frame) * period
+		check(input.BeginFrame(pts, time.Now()))
+		check(input.WriteFrame(0, encoded.Frame{Data: au, PTS: pts, Duration: period}))
+		select {
+		case <-time.After(period):
+		case <-ctx.Done():
+			t.Fatalf("capped H.264 viewer stalled: base=%d enhancement=%d", base.Load(), enhancement.Load())
+		}
+	}
+	if enhancement.Load() != 0 || prefixes.Load() != 0 || gaps.Load() != 0 {
+		t.Fatalf("capped H.264 viewer got %d enhancement packets, %d prefix NALs and %d sequence gaps",
+			enhancement.Load(), prefixes.Load(), gaps.Load())
 	}
 }

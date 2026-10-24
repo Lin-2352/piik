@@ -228,7 +228,13 @@ func (output *Output) writeRTP(packet *buffer.ExtPacket, layer int32, receiver s
 	if closed {
 		return 0
 	}
-	packet, admitted := output.cap.admit(packet, layer)
+	temporal := packet.Temporal
+	if source, ok := output.Receiver().(*outputReceiver); ok {
+		if frame, known := source.FrameTemporal(layer, packet.Packet.Timestamp); known {
+			temporal = frame
+		}
+	}
+	packet, admitted := output.cap.admitTemporal(packet, layer, temporal)
 	if !admitted {
 		return 0
 	}

@@ -3,6 +3,7 @@ package forwarding
 import (
 	"errors"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/TNTcraftHIM/Piik/internal/media/encoded"
@@ -28,6 +29,7 @@ type EncodedSource struct {
 	anchorPTS   time.Duration
 	anchorTime  time.Time
 	hasInput    bool
+	h264        bool
 }
 
 func NewEncodedSource(options SourceOptions) (*EncodedSource, error) {
@@ -39,6 +41,7 @@ func NewEncodedSource(options SourceOptions) (*EncodedSource, error) {
 		Source: source, packetizers: make([]*encoded.Packetizer, len(options.Formats)),
 		packets: make([]uint32, len(options.Formats)), octets: make([]uint64, len(options.Formats)),
 		codecBytes: make([]uint64, len(options.Formats)), rtpBytes: make([]uint64, len(options.Formats)),
+		h264: strings.EqualFold(options.Codec.MimeType, webrtc.MimeTypeH264),
 	}
 	for layer := range input.packetizers {
 		var payloader rtp.Payloader = &codecs.H264Payloader{}
@@ -81,9 +84,16 @@ func (input *EncodedSource) WriteFrame(layer int, frame encoded.Frame) error {
 		frame.PTS < input.anchorPTS || frame.PTS > input.inputPTS {
 		return errors.New("encoded output has no matching source input")
 	}
-	packets, err := input.packetizers[layer].Packetize(frame.Data, frame.PTS, frame.Duration)
+	data, temporal := frame.Data, int32(0)
+	if input.h264 {
+		data, temporal = encoded.H264TemporalLayer(frame.Data)
+	}
+	packets, err := input.packetizers[layer].Packetize(data, frame.PTS, frame.Duration)
 	if err != nil {
 		return err
+	}
+	if input.h264 && len(packets) > 0 {
+		input.recordFrameTemporal(int32(layer), packets[0].Timestamp, temporal)
 	}
 	for _, packet := range packets {
 		packet.SSRC = uint32(layer + 1)
@@ -94,7 +104,7 @@ func (input *EncodedSource) WriteFrame(layer int, frame encoded.Frame) error {
 		input.octets[layer] += uint64(len(packet.Payload))
 		input.rtpBytes[layer] += uint64(packet.MarshalSize())
 	}
-	input.codecBytes[layer] += uint64(len(frame.Data))
+	input.codecBytes[layer] += uint64(len(data))
 	// Correlate each layer with the actual input clock, not its encoder finish
 	// time. This is internal correlation data, not a backdated wire sender report.
 	return input.SetCorrelation(layer, &livekit.RTCPSenderReportState{
