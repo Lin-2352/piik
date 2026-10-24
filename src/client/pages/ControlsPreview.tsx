@@ -16,7 +16,6 @@ import { REACTION_IDS, type ReactionId } from "../../shared/room-interactions";
 import { PlaybackControls } from "../components/living/PlaybackControls";
 import { SharingSettings } from "../components/living/SharingSettings";
 import { LauncherForm, type AppMode } from "../components/living/LauncherForm";
-import { AppReleaseNotice } from "../components/living/AppReleaseNotice";
 import { useTheaterMode } from "../components/living/use-theater-mode";
 
 import { QualityPresets } from "../components/living/QualityPresets";
@@ -58,9 +57,6 @@ export function ControlsPreview() {
   const [microphoneDevice, setMicrophoneDevice] = useState("");
   const [sharingSettings, setSharingSettings] = useState(false);
   const [launchMode, setLaunchMode] = useState<AppMode>("link");
-  const [majorUpdate, setMajorUpdate] = useState(true);
-  const releaseVersion = majorUpdate ? "v2.0.0" : "v1.1.0";
-  const releaseURL = `https://github.com/TNTcraftHIM/Piik/releases/tag/${releaseVersion}`;
   const [launchSite, setLaunchSite] = useState("");
   const [launchPassword, setLaunchPassword] = useState("");
   const [launchLan, setLaunchLan] = useState("192.0.2.10");
@@ -237,11 +233,6 @@ export function ControlsPreview() {
     </section>
     <section id="launcher-preview" className="cp-section">
       <header className="cp-section-head"><span className="cp-number">08</span><h2>{t("client.launch.title")}</h2></header>
-      <div className="cp-tools">
-        <button className="lr-btn" type="button" aria-pressed={majorUpdate} onClick={() => setMajorUpdate(value => !value)}>
-          {en ? "Preview major update" : "预览跨大版本更新"}
-        </button>
-      </div>
       <div className="lr-client-launch">
         <LauncherForm version="v1.0.0" mode={launchMode} onModeChange={setLaunchMode}
           site={launchSite} onSiteChange={setLaunchSite}
@@ -250,12 +241,7 @@ export function ControlsPreview() {
             { address: "192.0.2.20", name: "vEthernet (Example Virtual Network Adapter with a Long Name)" },
           ] }}
           localAccessPassword={launchPassword} onLocalAccessPasswordChange={setLaunchPassword}
-          onSubmit={event => event.preventDefault()}>
-          <AppReleaseNotice update={{ kind: majorUpdate ? "major-update" : "update-available",
-            version: releaseVersion, revision: null,
-            url: `https://github.com/TNTcraftHIM/Piik/releases/download/${releaseVersion}/piik-app-windows-amd64.zip`,
-            releaseURL }} />
-        </LauncherForm>
+          onSubmit={event => event.preventDefault()} />
       </div>
     </section>
     <section id="interaction-preview" className="cp-section">

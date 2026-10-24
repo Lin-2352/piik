@@ -9,7 +9,7 @@ if (process.argv.length !== 6 || !image) {
   throw new Error("Usage: node scripts/publish-container.mjs <local-image-prefix> <artifacts> <version> <full-SHA>");
 }
 const { servers } = readReleaseArtifacts(directory, version, revision);
-const repository = process.env.GITHUB_REPOSITORY || "TNTcraftHIM/Piik";
+const repository = process.env.GITHUB_REPOSITORY || "Lin-2352/piik";
 const destination = `ghcr.io/${repository.toLowerCase()}`;
 const run = (command, ...args) => execFileSync(command, args, {
   encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 300_000,

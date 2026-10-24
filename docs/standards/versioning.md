@@ -108,42 +108,16 @@ SHA-256 listing generated from the verified packages. GitHub's automatic source
 archives are separate from Piik's uploaded packages. Retain original build
 metadata with operator deployment records as described in [deployment](../deployment.md).
 
-Update checks compare actual release precedence. The App reports its compiled
-OS/architecture and links to that platform's ZIP in the selected release metadata;
-the release page remains the fallback when no matching attachment is available.
-Fixed archive names and published names with that release's SHA suffix are
-accepted only with the provider's exact release download URL. Downloads start on
-click; checking for an update does not fetch the archive.
-Newer version wins even when the source SHA is unchanged. Same version with a
-different known SHA reports a different official build, not a newer one. A
-development build with a known differing SHA offers the official release as a
-manual choice; it makes no ordering claim. Older releases never cause an update
-notice. Unknown SHA is not inferred from a branch name in GitHub metadata.
-The publisher records a full SHA in `target_commitish` and verifies actual tag
-identity separately. Stable update notices ignore prereleases.
+Neither the App nor the Server checks for updates: release precedence is the
+packager's and operator's concern, and a new version arrives as a new package.
+Newer version wins even when the source SHA is unchanged; the publisher records a
+full SHA in `target_commitish` and verifies actual tag identity separately.
 
 ### Major-Upgrade Guidance
 
-The App update notice keeps a separate link to the selected provider's exact
-release page. A newer major adds a short, visible breaking-change notice; the
-Server logs the same distinction while preserving its checker JSON and exit
-codes. This is release guidance, not a replacement for actual wire checks.
-Updates remain a manual action. Release prose stays on GitHub/Gitee; the App
-does not fetch or render remote Markdown or add a second changelog store.
-Direct download remains the primary action; reading notes is optional. Keep the
-major warning inline, without a confirmation dialog or mandatory website detour.
-
-Older installed Apps cannot acquire new warning UI from release metadata.
-Their historical download behavior is accepted; do not split release feeds or
-force a stepping-stone release solely to make advisory presentation identical.
-Before a major release, put bilingual upgrade guidance near the top of its
-release notes and on the website download entry. Name the actual incompatible
-App/Site combinations, required upgrade order, interruptions and any persistent
-data implications. Do not assume everyone installed the preceding minor/patch.
-Verify the oldest relevant public App/page and the last preceding-major release
-against the candidate: actual mismatches must fail clearly at their owning
-contract. Keep historical packages available through GitHub releases. A major
-preparation change does not itself authorize a wire bump, migration or release.
+A newer major changes the wire contract only through the compatibility rules
+above; there is no in-product upgrade notice. Release prose stays with the
+publisher's release page.
 
 ## Automatic Publication
 

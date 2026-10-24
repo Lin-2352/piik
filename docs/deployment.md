@@ -124,7 +124,7 @@ Do not build or run the full repository check on a constrained production host.
 That host runs only the packaged binary and needs no Node, npm, or dependency
 install.
 
-## Update Check
+## Build Identity
 
 Builds carry a product version plus full source revision. Packagers use one
 release plan or exact Git tag and inject its identity into Server, App and Web;
@@ -132,37 +132,9 @@ untagged local candidates use `development`. Schema-2 package descriptors carry
 the same pair and artifact hashes. The [version policy](./standards/versioning.md)
 owns ordering and first-public-release readiness.
 
-The default App launcher starts immediately, then checks GitHub Releases in the
-background, falling back to the Gitee mirror if GitHub is unavailable. The
-[release-source policy](./standards/versioning.md#release-sources) owns selection
-and provenance checks. It shows a link only when
-the latest stable release is newer, the same version has a known different source
-SHA, or a development build can choose the official release. These notices are
-distinct; a different SHA alone is not called newer.
-The request sends no current revision, credentials, room data, or media data;
-network errors, private-repository responses, and missing releases are treated
-as no notice. Checking does not download an archive, replace files, or interrupt
-a running share; the user can follow the update link to download the App ZIP.
-
-An operator can perform the corresponding read-only Server check:
-
-```sh
-bash deploy/check-release.sh
-```
-
-The Server also checks once in the background after startup and logs an available
-release with its download URL. It does not delay startup, periodically poll,
-notify room participants or install anything.
-
-The script runs the deployed binary's `--check-release`, using that binary's
-injected identity, and prints one JSON result with versions, available source
-SHAs and the release URL. Exit `0` means no newer/different official build,
-`10` means `update-available`, `different-build` or `official-release`, and `20`
-means the check is unavailable. It does not accept a separate revision file.
-For a private repository, inject a short-lived `GITHUB_TOKEN`
-through the operator environment; never place it in the repository or command
-line. The command does not mutate files, services, containers, or persistent
-state.
+Neither the App nor the Server checks for updates or contacts any release
+service: a new version is a new package from whoever distributes it. The Server
+logs its version and revision at start for the operator's records.
 
 ## Atomic Cutover
 

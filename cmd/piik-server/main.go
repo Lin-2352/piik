@@ -2,10 +2,8 @@
 // environment, serves the embedded Browser UI together with the signaling and
 // room API, and stops on SIGINT or SIGTERM.
 //
-// Two maintenance modes exit without serving: --check-config validates the
-// environment (the release wrapper runs it as the service user before cutover)
-// and --check-release compares this binary with the latest published
-// release (see release.go).
+// --check-config validates the environment and exits without serving (the
+// release wrapper runs it as the service user before cutover).
 package main
 
 import (
@@ -45,10 +43,6 @@ var (
 
 func main() {
 	checkConfig := flag.Bool("check-config", false, "validate the environment and exit")
-	checkRelease := flag.Bool("check-release", false,
-		"report whether a newer published release exists and exit")
-	apiURL := flag.String("api-url", defaultReleaseAPIURL,
-		"release metadata endpoint used by --check-release")
 	debug := flag.Bool("debug", false, "save opt-in server diagnostics to rotated files")
 	flag.Parse()
 
@@ -56,8 +50,6 @@ func main() {
 		fail(err)
 	}
 	switch {
-	case *checkRelease:
-		os.Exit(checkDeployedRelease(context.Background(), *apiURL, os.Stdout))
 	case *checkConfig:
 		if _, err := config.Load(environment()); err != nil {
 			fail(err)
@@ -140,20 +132,7 @@ func serve(debug bool) (returnedErr error) {
 		"sfu", configuration.SFU != nil, "natPrediction", configuration.NATPredictionEnabled)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	// One bounded background lookup never delays serving. Join it before closing
-	// diagnostic outputs so shutdown cannot leave a late writer behind.
-	releaseChecked := make(chan struct{})
-	go func() {
-		defer close(releaseChecked)
-		result := checkRelease(ctx, BuildVersion, BuildRevision, defaultReleaseAPIURL, os.Getenv("GITHUB_TOKEN"), mirrorReleaseAPIURL)
-		if ctx.Err() == nil {
-			logReleaseNotice(logger, result)
-		}
-	}()
-	defer func() {
-		stop()
-		<-releaseChecked
-	}()
+	defer stop()
 	<-ctx.Done()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()

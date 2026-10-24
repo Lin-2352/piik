@@ -305,11 +305,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PIIK_RELEASE_VERSION: ${{ needs.validate.outputs.version }}
       - name: Mirror verified release to Gitee
-        if: ${{ !cancelled() && steps.github_release.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.github_release.outcome == 'success' && vars.GITEE_REPOSITORY != '' }}
         run: >-
           node scripts/mirror-release.mjs
           "$RUNNER_TEMP/publish-release" "$PIIK_RELEASE_VERSION" "$GITHUB_SHA"
         env:
           GH_TOKEN: ${{ github.token }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_REPOSITORY: ${{ vars.GITEE_REPOSITORY }}
           PIIK_RELEASE_VERSION: ${{ needs.validate.outputs.version }}

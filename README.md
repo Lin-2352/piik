@@ -2,11 +2,8 @@
 <h1 align="center">Piik</h1>
 <p align="center"><strong>Share the good stuff.</strong><br>Private screen sharing for you and up to 20 friends.</p>
 <p align="center">
-  <a href="https://piik.tv">Website</a> ·
-  <a href="https://github.com/TNTcraftHIM/Piik/releases">Download</a> ·
-  <a href="https://gitee.com/TNTcraftHIM/Piik/releases">Gitee mirror</a> ·
-  <a href="https://demo.piik.tv">Use online</a> ·
-  <a href="https://piik.tv/docs/?lang=en">Documentation</a>
+  <a href="./docs/guide/getting-started.md">Getting started</a> ·
+  <a href="./docs/operations/self-hosting.md">Self-hosting</a>
 </p>
 <p align="center">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-36564f?style=flat-square" alt="License: MIT"></a>
@@ -57,8 +54,7 @@ you can also create a room in the online version.
 
 | Start here | What you need to do |
 | --- | --- |
-| [Use Piik online](https://demo.piik.tv) | Share from a desktop browser, or choose Camera on a phone with browser camera support. |
-| [Download Piik App](https://piik.tv/#download) | Extract and open the App, choose **Public invite**, then **Open Piik** to create a temporary room. |
+| [Piik App](./cmd/piik-app/README.md) | Extract and open the App, choose **Public invite**, then **Open Piik** to create a temporary room. |
 | [Host your own site](./docs/operations/self-hosting.md) | Advanced: deploy Piik Server on a Linux x64 or ARM64 server with your own domain, then connect through Piik App or a browser. |
 
 <p align="center"><img src="./docs/assets/quickstart.svg" width="640" alt="Choose a screen, send an invitation, watch together."></p>
@@ -84,13 +80,13 @@ Download a ZIP beginning with **`piik-app`**. The filename also identifies the p
 | `linux-amd64` | Linux x64 |
 | `linux-arm64` | Linux ARM64 |
 
-[**Full setup guide →**](./docs/guide/getting-started.md) · [**Open online →**](https://demo.piik.tv)
+[**Full setup guide →**](./docs/guide/getting-started.md)
 
 Browser capture requires HTTPS or `localhost`. Windows App and desktop browser
 sharing are the primary tested paths. Physical-device coverage for the macOS and
-Linux apps is still limited; [test results and feedback are welcome](https://github.com/TNTcraftHIM/Piik/issues).
+Linux apps is still limited; test results and feedback are welcome.
 P2P-only modes, including the App's temporary public
-link and the online version, may not connect on restrictive networks.
+link, may not connect on restrictive networks.
 
 ## Self-hosting
 

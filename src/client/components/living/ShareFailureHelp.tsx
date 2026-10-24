@@ -12,13 +12,12 @@ import "./share-failure-help.css";
 export function ShareFailureHelp({ status, label, code, checks }: {
   status: StatusDescriptor; label: string; code: string; checks: CopyKey[];
 }) {
-  const { lang, vis, t } = useCopy();
+  const { vis, t } = useCopy();
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState<"idle" | "done" | "failed">("idle");
   const hint = (status.tooltip ?? status.comic)!;
-  const guide = `https://piik.tv/docs/${lang === "zh" ? "zh/" : ""}troubleshooting.html`;
   return <>
     <StatusIndicator status={status} label={label} onActivate={() => {
       setCopied("idle");
@@ -43,7 +42,6 @@ export function ShareFailureHelp({ status, label, code, checks }: {
         </ol>
         {!vis && code.startsWith("app/") && <p className="lr-share-help-note">{t("shareHelp.appDebug")}</p>}
         <nav aria-label={t("shareHelp.title")}>
-          <a className="lr-btn" href={guide} target="_blank" rel="noopener noreferrer" aria-label={t("shareHelp.guide")}>{!vis && t("shareHelp.guide")}<Glyph name="arrowRight" size={16} /></a>
           <BrowserDiagnosticsButton />
           <button type="button" className="lr-btn" aria-label={t(copied === "done" ? "shareHelp.copied" : "shareHelp.copy")} onClick={() => {
             // Deliberately excludes URLs, invitation credentials and raw exceptions.

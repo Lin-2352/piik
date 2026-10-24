@@ -4,7 +4,7 @@ ARG PIIK_REVISION
 ARG PIIK_SERVER_SHA256
 LABEL org.opencontainers.image.title="Piik Server" \
       org.opencontainers.image.description="Private screen sharing with Web, signaling, STUN and optional media fallback." \
-      org.opencontainers.image.source="https://github.com/TNTcraftHIM/Piik" \
+      org.opencontainers.image.source="https://github.com/Lin-2352/piik" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version=$PIIK_VERSION \
       org.opencontainers.image.revision=$PIIK_REVISION \

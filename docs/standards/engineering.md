@@ -70,7 +70,7 @@ Directory names are a map, not a requirement to introduce another layer.
 | Browser/App discovery and control | `src/client/native/wire.ts`, `internal/app/loopback/protocol.go`, `internal/app/nativecontrol/wire.go` |
 | App/capture sidecar | `internal/app/nativecapture` and each platform capture adapter; probe/commands and encoded-frame envelope are distinct formats |
 | Configuration and persistence | `internal/server/config`, `internal/app/config`, `internal/server/room/database.go`; operator semantics in [configuration](./configuration.md) |
-| Release and update metadata | Existing packaging scripts, `src/client/lib/release-update.ts`, `cmd/piik-server/release.go`; identity/compatibility in [versioning](./versioning.md), operations in [deployment](../deployment.md) |
+| Release and update metadata | Existing packaging scripts; identity/compatibility in [versioning](./versioning.md), operations in [deployment](../deployment.md) |
 
 The shared `tests/fixtures/wire-samples.json` is consumed by TypeScript and Go
 fixture tests. It covers room requests and signaling; it is not a universal

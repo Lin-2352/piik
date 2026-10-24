@@ -18,7 +18,7 @@ or press **O** there to retry. Keep the App running while using that page.
 
 Windows App and browser sharing are the primary tested paths. Physical-device
 coverage for the macOS and Linux apps is still limited; test results and
-[feedback](https://github.com/TNTcraftHIM/Piik/issues) are welcome. macOS native
+feedback are welcome. macOS native
 capture requires macOS 13 or newer on Apple silicon or Intel. Package construction and public Release
 publication are separate steps in [deployment](../../docs/deployment.md).
 
@@ -34,11 +34,9 @@ publication are separate steps in [deployment](../../docs/deployment.md).
   [App configuration](../../docs/standards/configuration.md#piik-app-configuration)
   covers saved preferences and custom paths.
 - The `--site`, `--local`, and `--link` flags select a mode for CI and development.
-- The default launcher checks official releases after it opens, using GitHub
-  first and Gitee if GitHub is unavailable. Click the update button to download
-  the matching platform ZIP, or open the release page when no package matches.
-  **Release notes** opens separately; a new major version includes an upgrade
-  warning. The App does not install or replace itself.
+- The launcher makes no network request on its own: it never checks for or
+  downloads updates. A new version is a new package from whoever distributes it
+  to you. The App does not install or replace itself.
 
 Local rooms last for this App run and work on a reachable LAN. **Public invite**
 uses the packaged Cloudflare Tunnel helper to expose that same room service at a

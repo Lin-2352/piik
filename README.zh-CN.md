@@ -2,11 +2,8 @@
 <h1 align="center">Piik</h1>
 <p align="center"><strong>来，看点<br>好康的。</strong><br>私密屏幕共享，邀请最多 20 位朋友观看。</p>
 <p align="center">
-  <a href="https://piik.tv/?lang=zh-CN">官网</a> ·
-  <a href="https://github.com/TNTcraftHIM/Piik/releases">下载</a> ·
-  <a href="https://gitee.com/TNTcraftHIM/Piik/releases">Gitee 镜像</a> ·
-  <a href="https://demo.piik.tv">在线版</a> ·
-  <a href="https://piik.tv/docs/zh/">文档中心</a>
+  <a href="./docs/guide/getting-started.zh-CN.md">快速开始</a> ·
+  <a href="./docs/operations/self-hosting.zh-CN.md">自托管</a>
 </p>
 <p align="center">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-36564f?style=flat-square" alt="MIT 许可"></a>
@@ -49,12 +46,11 @@ Piik 是一个免费开源的私密屏幕共享工具，适合游戏直播、一
 
 **观看分享：** 打开朋友发来的邀请链接。画面没有自动播放时，点击**播放**即可。
 
-**分享画面：** 推荐下载 **Piik App**。想免安装，也可以打开在线版直接创建房间。
+**分享画面：** 推荐使用 **Piik App**。
 
 | 从这里开始 | 需要做什么 |
 | --- | --- |
-| [使用在线版](https://demo.piik.tv) | 用电脑浏览器分享画面；手机浏览器支持摄像头访问时，也可选择摄像头分享。 |
-| [下载 Piik App](https://piik.tv/?lang=zh-CN#download) | 解压并启动 Piik App，选择**公网邀请**，点击**进入 Piik**，创建临时房间。 |
+| [Piik App](./cmd/piik-app/README.zh-CN.md) | 解压并启动 Piik App，选择**公网邀请**，点击**进入 Piik**，创建临时房间。 |
 | [部署自己的站点](./docs/operations/self-hosting.zh-CN.md) | 进阶使用：在 Linux x64 或 ARM64 服务器上部署 Piik Server、配置自己的域名，再用 Piik App 或浏览器连接。 |
 
 <p align="center"><img src="./docs/assets/quickstart.svg" width="640" alt="选择画面，发送邀请，一起观看。"></p>
@@ -78,11 +74,11 @@ Piik App 提供本地房间、临时公网邀请和连接已有站点三种模�
 | `linux-amd64` | Linux x64 |
 | `linux-arm64` | Linux ARM64 |
 
-[**完整使用教程 →**](./docs/guide/getting-started.zh-CN.md) · [**打开在线版 →**](https://demo.piik.tv)
+[**完整使用教程 →**](./docs/guide/getting-started.zh-CN.md)
 
 浏览器采集需要 HTTPS 或 `localhost`。目前主要测试 Windows 版 Piik App 和桌面浏览器分享。
-macOS 和 Linux 版 Piik App 仍需更多实机测试，欢迎有设备的朋友试用并[反馈问题](https://github.com/TNTcraftHIM/Piik/issues)。
-Piik App 的公网邀请和在线版使用纯 P2P 连接，
+macOS 和 Linux 版 Piik App 仍需更多实机测试，欢迎有设备的朋友试用并反馈问题。
+Piik App 的公网邀请使用纯 P2P 连接，
 在受限网络下可能无法连通。
 
 ## 自行部署

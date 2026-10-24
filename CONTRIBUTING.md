@@ -9,9 +9,9 @@ English and Chinese are both welcome in issues and PRs.
 | Contribution / 参与方式 | Start here / 从这里开始 |
 | --- | --- |
 | Translate or improve wording / 翻译、校对文案 | [Translation guide](./docs/guide/translating.md) · [中文翻译教程](./docs/guide/translating.zh-CN.md) |
-| Report a bug / 反馈问题 | [Issue templates](https://github.com/TNTcraftHIM/Piik/issues/new/choose); include version, environment, steps and actual result / 附版本、环境、步骤与实际结果 |
+| Report a bug / 反馈问题 | Open an issue in this repository; include version, environment, steps and actual result / 附版本、环境、步骤与实际结果 |
 | Improve a guide / 改进教程 | [Documentation map](./docs/README.md); identify the confusing step and explain the expected result / 指出不清楚的步骤及预期结果 |
-| Suggest a feature / 功能建议 | Search [existing issues](https://github.com/TNTcraftHIM/Piik/issues) first, then describe the use case / 先搜索已有讨论，再说明使用场景 |
+| Suggest a feature / 功能建议 | Search existing issues first, then describe the use case / 先搜索已有讨论，再说明使用场景 |
 | Contribute code / 参与开发 | [Run from source](./docs/README.md#run-from-source), then follow the workflow below / 从源码启动，按下文流程修改 |
 
 Keep feedback specific and respectful. Explain a wording or design disagreement

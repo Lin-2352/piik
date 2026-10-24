@@ -16,7 +16,7 @@ const files = artifacts.files.map((file) => file.path);
 if (option === "--dry-run") {
   process.stdout.write(`${JSON.stringify({ version, revision, targets: artifacts.targets, files: files.length })}\n`);
 } else {
-  const repository = process.env.GITHUB_REPOSITORY || "TNTcraftHIM/Piik";
+  const repository = process.env.GITHUB_REPOSITORY || "Lin-2352/piik";
   const gh = (...args) => execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   function verifyTag(required = false) {
     // A successful empty match is absence; API/authentication errors must fail.

@@ -216,18 +216,6 @@ export function LauncherForm({
           <span className={vis ? "visually-hidden" : undefined}>{t("client.launch.version", { version })}</span>
           {vis && <span aria-hidden="true">{version}</span>}
         </p>}
-        <p>
-          <span className={vis ? "visually-hidden" : undefined}>{t("client.launch.credit")}</span>
-          {vis && <span aria-hidden="true">MIT · TNTcraft</span>}
-        </p>
-        <div className="lr-client-project-links">
-          <a href="https://piik.tv/" target="_blank" rel="noopener noreferrer" aria-label={t("client.launch.website")}>
-            {vis ? "piik.tv" : t("client.launch.website")}<span aria-hidden="true"> ↗</span>
-          </a>
-          <a href="https://github.com/TNTcraftHIM/Piik" target="_blank" rel="noopener noreferrer" aria-label={t("client.launch.source")}>
-            {vis ? "GitHub" : t("client.launch.source")}<span aria-hidden="true"> ↗</span>
-          </a>
-        </div>
       </div>
     </form>
   );

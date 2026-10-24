@@ -15,7 +15,7 @@ Windows 运行 `piik-app.exe`，Linux 运行 `./piik-app`，macOS 打开 `Piik A
 使用网页期间，请保持 App 运行。
 
 目前主要测试 Windows 版 Piik App 和浏览器分享。macOS 与 Linux 版 Piik App 仍需更多实机测试，
-欢迎试用并[反馈结果](https://github.com/TNTcraftHIM/Piik/issues)。macOS 原生采集需要
+欢迎试用并反馈结果。macOS 原生采集需要
 Apple 芯片或 Intel Mac，以及 macOS 13 或更新版本。构建程序包与公开发布 Release 是两个独立步骤，
 详见[部署与发布](../../docs/deployment.md)。
 
@@ -28,9 +28,8 @@ Apple 芯片或 Intel Mac，以及 macOS 13 或更新版本。构建程序包与
   模式偏好保存在配置旁的 `client.json.mode` 中；保存项与自定义路径见
   [App 配置](../../docs/standards/configuration.md#piik-app-configuration)。
 - `--site`、`--local` 和 `--link` 用于在 CI 或开发时直接选择模式。
-- 默认启动页打开后会检查官方发布，优先使用 GitHub，GitHub 不可用时使用 Gitee。
-  点击更新按钮下载对应平台的 ZIP，没有匹配包时打开发布页。
-  **版本说明** 可单独查看；发现新的大版本时会显示升级提示。App 不会自行安装或替换程序。
+- 启动页不会自行发起任何网络请求，也不会检查或下载更新；新版本即新的程序包，
+  由分发者提供。App 不会自行安装或替换程序。
 
 本地房间仅在本次 App 运行期间有效，适用于设备间可互相访问的局域网。
 **公网邀请** 通过程序包中的 Cloudflare Tunnel 辅助程序，为同一个房间服务提供临时 HTTPS 地址。

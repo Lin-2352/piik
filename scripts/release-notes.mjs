@@ -60,7 +60,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       throw new Error("Use release-notes.mjs <version> <full-SHA> [--github-summary]");
     }
     const body = releaseNotes(process.cwd(), version, revision,
-      process.env.GITHUB_REPOSITORY || "TNTcraftHIM/Piik", { allowEmpty: Boolean(option) });
+      process.env.GITHUB_REPOSITORY || "Lin-2352/piik", { allowEmpty: Boolean(option) });
     if (option) {
       if (!process.env.GITHUB_STEP_SUMMARY) throw new Error("GITHUB_STEP_SUMMARY is missing");
       appendFileSync(process.env.GITHUB_STEP_SUMMARY,

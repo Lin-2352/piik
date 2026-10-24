@@ -37,8 +37,8 @@ const release = (draft: boolean): Release => ({
 
 describe("Gitee mirror publication", () => {
   const marker = `<!-- piik-source: ${revision} -->`;
-  const api = "https://gitee.com/api/v5/repos/TNTcraftHIM/Piik";
-  const download = `https://gitee.com/TNTcraftHIM/Piik/releases/download/${version}/`;
+  const api = "https://gitee.com/api/v5/repos/Lin-2352/piik";
+  const download = `https://gitee.com/Lin-2352/piik/releases/download/${version}/`;
   const sourceAssets = packageNames.map((name) => {
     const bytes = readFileSync(join(directory, name));
     return { name, size: bytes.length, digest: `sha256:${hash(bytes)}`, state: "uploaded" };
@@ -50,11 +50,12 @@ describe("Gitee mirror publication", () => {
     const attachments = sourceAssets.map(({ name, size }) => ({ name, size, browser_download_url: download + name }));
     const present = options.existing === "pending" ? attachments.slice(0, 1) : options.missing ? [] : attachments;
     command.mockReturnValue(JSON.stringify({
-      ...release(false), html_url: `https://github.com/TNTcraftHIM/Piik/releases/tag/${version}`,
+      ...release(false), html_url: `https://github.com/Lin-2352/piik/releases/tag/${version}`,
       target_commitish: options.wrongSource ? "b".repeat(40) : revision,
       assets: options.wrongDigest ? sourceAssets.map((asset) => ({ ...asset, digest: "sha256:wrong" })) : sourceAssets,
     }));
     vi.stubEnv("GITEE_TOKEN", "fixture-mirror-token");
+    vi.stubEnv("GITEE_REPOSITORY", "Lin-2352/piik");
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url.startsWith(download)) {
