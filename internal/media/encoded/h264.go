@@ -63,7 +63,9 @@ func H264TemporalLayer(au []byte) ([]byte, int32) {
 		}
 		start = end
 	}
-	if slices > 0 && !referenced {
+	if referenced {
+		temporal = 0 // later frames predict from it: dropping it breaks them
+	} else if slices > 0 {
 		temporal = max(temporal, 1)
 	}
 	if out == nil {

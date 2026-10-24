@@ -58,3 +58,17 @@ func TestH264TemporalLayerTreatsNonReferenceFramesAsDroppable(t *testing.T) {
 		}
 	}
 }
+
+// An encoder that marks its enhancement layer as reference frames (a P frame
+// the next frame predicts from) must never lose it, whatever the prefix says:
+// dropping it would break every later frame of a capped viewer.
+func TestH264TemporalLayerNeverDropsAReferencedFrameTheEncoderCallsEnhancement(t *testing.T) {
+	au := []byte{0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x0e, 0x40, 0x80, 0x27, 0, 0, 0, 1, 0x41, 0x9a}
+	got, temporal := H264TemporalLayer(au)
+	if temporal != 0 {
+		t.Fatalf("a frame with a reference slice reported temporal layer %d, want 0", temporal)
+	}
+	if want := []byte{0, 0, 0, 1, 0x09, 0xf0, 0, 0, 0, 1, 0x41, 0x9a}; !bytes.Equal(got, want) {
+		t.Fatalf("prefix NAL not stripped: % x", got)
+	}
+}
