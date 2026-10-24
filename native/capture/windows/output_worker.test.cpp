@@ -207,6 +207,33 @@ void CheckActiveWaitsForKeyFrame() {
   assert(ActivatesCapture(EncodedAccessUnit{2, true, {0, 0, 0, 1, 0x65, 0x88}}));
 }
 
+// The quality floor (max quantizer) only applies where the bitrate budget is
+// generous enough that it cannot defeat the ceiling. Measured: H.264 at QP 30
+// needed 27-35 Mbps on complex 2560x1600@120 content, so pinning QP 30 under a
+// 15 Mbps ceiling made the encoder exceed it by 2x and overflow the sender.
+void CheckQuantizerFloorHonorsCeiling() {
+  constexpr UINT32 kUnbounded = VideoProfile::kQuantizerUnbounded;
+  constexpr UINT32 kFloor = VideoProfile::kMaxQuantizer;
+  // 15 Mbps over 2560x1600@120 is 0.031 bits/pixel: far below what QP 30 costs.
+  assert(MaxQuantizer(OutputKind::h264, VideoProfile{2560, 1600, 120, 15'000'000}) == kUnbounded);
+  assert(MaxQuantizer(OutputKind::h265, VideoProfile{2560, 1600, 120, 15'000'000}) == kUnbounded);
+  // The derived half-size copy at a quarter of the budget is the same density.
+  assert(MaxQuantizer(OutputKind::h264, VideoProfile{1280, 800, 120, 3'750'000}) == kUnbounded);
+  // A generous budget keeps the floor (the case it was measured for: 38 Mbps).
+  assert(MaxQuantizer(OutputKind::h264, VideoProfile{2560, 1600, 120, 40'000'000}) == kFloor);
+  assert(MaxQuantizer(OutputKind::h264, VideoProfile{1920, 1080, 60, 20'000'000}) == kFloor);
+  // HEVC is about twice as efficient at one quantizer, so its threshold is lower.
+  assert(MaxQuantizer(OutputKind::h265, VideoProfile{2560, 1600, 120, 25'000'000}) == kFloor);
+  assert(MaxQuantizer(OutputKind::h264, VideoProfile{2560, 1600, 120, 25'000'000}) == kUnbounded);
+  // AV1's scale is different and unmeasured: unchanged.
+  assert(MaxQuantizer(OutputKind::av1, VideoProfile{2560, 1600, 120, 15'000'000}) == kFloor);
+  // A live bitrate change moves the answer in both directions.
+  VideoProfile live{2560, 1600, 120, 40'000'000};
+  assert(MaxQuantizer(OutputKind::h264, live) == kFloor);
+  live.bit_rate = 12'000'000;
+  assert(MaxQuantizer(OutputKind::h264, live) == kUnbounded);
+}
+
 // Two temporal layers only where halving still leaves smooth motion (>= 50 fps)
 // and the viewer cap can read them (LiveKit parses the HEVC temporal id).
 void CheckTemporalLayers() {
@@ -361,6 +388,7 @@ int main() {
   CheckTemporalLayers();
   CheckH264TemporalInspection();
   CheckActiveWaitsForKeyFrame();
+  CheckQuantizerFloorHonorsCeiling();
   VideoProfile profile{2560, 1440, 60, 12'000'000};
   ValidateVideoProfile(profile);
   assert(profile.h264_level() == 51 && profile.profile_level_id() == "42c033");

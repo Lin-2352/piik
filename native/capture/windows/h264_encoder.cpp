@@ -339,6 +339,19 @@ bool TrySetU32(ICodecAPI* codec, const GUID& key, UINT32 value) {
   return holds;
 }
 
+UINT32 MaxQuantizer(OutputKind kind, const VideoProfile& profile) {
+  // Bits per pixel per frame at which QP 30 stops overshooting on hard content.
+  // H.264 was measured; HEVC spends about half the bits at the same quantizer.
+  // AV1's scale differs and is unmeasured, so it keeps the previous behaviour.
+  double threshold = 0.0;
+  if (kind == OutputKind::h264) threshold = 0.075;
+  else if (kind == OutputKind::h265) threshold = 0.04;
+  const double pixel_rate = static_cast<double>(profile.width) * profile.height * profile.frame_rate;
+  if (threshold == 0.0 || pixel_rate <= 0.0) return VideoProfile::kMaxQuantizer;
+  return profile.bit_rate / pixel_rate >= threshold ? VideoProfile::kMaxQuantizer
+                                                    : VideoProfile::kQuantizerUnbounded;
+}
+
 UINT32 TemporalLayerCount(OutputKind kind, const VideoProfile& profile) {
   const bool layered = kind == OutputKind::h265 || kind == OutputKind::h264;
   return layered && profile.frame_rate >= 100 ? 2 : 1;
@@ -372,8 +385,8 @@ void ConfigureCodec(
                  profile.quality_vs_speed());
   // Quality floor: a hard frame may spend more of the budget instead of turning
   // to mush. Measured on a 120 fps clip at 38 Mbps: average QP 26 -> 20 with the
-  // bitrate unchanged and every frame still delivered.
-  (void)TrySetU32(codec, CODECAPI_AVEncVideoMaxQP, VideoProfile::kMaxQuantizer);
+  // bitrate unchanged and every frame still delivered. Off under a tight budget.
+  (void)TrySetU32(codec, CODECAPI_AVEncVideoMaxQP, MaxQuantizer(kind, profile));
   RequireProperty(codec, CODECAPI_AVEncVideoForceKeyFrame,
                   "codec-force-keyframe");
   // Optional: an encoder without temporal layers still serves every viewer at
@@ -786,6 +799,7 @@ LiveEncoder::LiveEncoder(
   if (kind != OutputKind::h264 && !IsNewHardwareCodec(kind))
     Fail("mft-codec", "hardware encoder codec is unsupported");
   ConfigureCodec(selected_.codec.Get(), profile_, kind);
+  max_quantizer_ = MaxQuantizer(kind, profile_);
   ComPtr<IMFMediaType> output_type = CreateOutputType(profile_, kind);
   Check(selected_.transform->SetOutputType(0, output_type.Get(), 0),
         "mft-set-output-type");
@@ -817,6 +831,13 @@ void LiveEncoder::SetBitrate(UINT32 bitrate) {
   SetU32(selected_.codec.Get(), CODECAPI_AVEncCommonMeanBitRate, profile_.mean_bit_rate(),
          "codec-live-bitrate");
   (void)TrySetU32(selected_.codec.Get(), CODECAPI_AVEncCommonMaxBitRate, bitrate);
+  // The floor depends on the budget: a live cut must not leave it pinning the
+  // quantizer under a ceiling it can no longer meet.
+  const UINT32 floor = MaxQuantizer(kind, profile_);
+  if (floor != max_quantizer_ &&
+      TrySetU32(selected_.codec.Get(), CODECAPI_AVEncVideoMaxQP, floor)) {
+    max_quantizer_ = floor;
+  }
 }
 
 EncodedAccessUnit LiveEncoder::Encode(

@@ -56,6 +56,8 @@ struct VideoProfile final {
   // raised the quantiser on ordinary content and made fine detail shimmer.
   UINT32 mean_bit_rate() const { return bit_rate; }
   static constexpr UINT32 kMaxQuantizer = 30;
+  // The largest quantizer both H.264 and HEVC allow: no floor on picture quality.
+  static constexpr UINT32 kQuantizerUnbounded = 51;
   // How often the capture loop re-reads display presentation (window resize).
   UINT32 presentation_refresh_frames() const { return frame_rate * 2; }
   LONGLONG frame_duration_100ns() const {
@@ -233,7 +235,8 @@ std::string GuidString(const GUID& value);
 void SetU32(ICodecAPI* codec, const GUID& key, UINT32 expected,
             const std::string& name);
 void ConfigureCodec(ICodecAPI* codec,
-                    const VideoProfile& profile = kDefaultVideoProfile);
+                    const VideoProfile& profile = kDefaultVideoProfile,
+                    OutputKind kind = OutputKind::h264);
 ComPtr<IMFMediaType> CreateOutputType(
     const VideoProfile& profile = kDefaultVideoProfile, OutputKind kind = OutputKind::h264);
 ComPtr<IMFMediaType> CreateInputType(
@@ -253,6 +256,13 @@ ComPtr<IMFSample> CreateSurfaceSample(ID3D11Texture2D* texture,
 NalSummary InspectAnnexB(const std::vector<UINT8>& bytes);
 ObuSummary InspectObus(const std::vector<UINT8>& bytes);
 HevcSummary InspectHevc(const std::vector<UINT8>& bytes);
+// Quality floor: cap the quantizer so a hard frame spends bits instead of
+// turning to mush. It is only safe where the budget is large; under a tight one
+// a pinned quantizer makes the encoder exceed its bitrate ceiling (H.264 at QP 30
+// measured 27-35 Mbps against a 15 Mbps ceiling), which floods the sender. So
+// it applies above a per-codec density of bits per pixel and is otherwise off.
+UINT32 MaxQuantizer(OutputKind kind, const VideoProfile& profile);
+
 // Two temporal layers let the Host send a viewer that cannot decode the full
 // rate every other frame. HEVC carries the layer in its NAL header and H.264 in
 // an SVC prefix NAL; only a rate whose half stays smooth (>= 50 fps) is split.
@@ -311,6 +321,8 @@ class LiveEncoder final : public VideoEncoder {
   // The SPS level is fixed by the session's configured profile; live bitrate
   // changes must not move the level the bitstream is checked against.
   const VideoProfile configured_;
+  // The quantizer cap currently set on the encoder (see MaxQuantizer).
+  UINT32 max_quantizer_ = 0;
   MFT_OUTPUT_STREAM_INFO output_info_ = {};
   UINT32 input_requests_ = 0;
   std::optional<std::string> profile_level_id_;
