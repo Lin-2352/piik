@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/TNTcraftHIM/Piik/internal/app"
+	"github.com/TNTcraftHIM/Piik/internal/app/payload"
 )
 
 func main() {
@@ -49,6 +50,13 @@ func run(args []string) int {
 		return 2
 	}
 	options.DisableBrowser = os.Getenv("PIIK_CLIENT_GATE_NO_BROWSER") == "true"
+	// A standalone build carries its helper programs and unpacks them beside
+	// itself; explicit helper paths always win, and an ordinary build does nothing.
+	if options.CaptureProcess == "" && options.TunnelProcess == "" {
+		if err := payload.EnsureNextToExecutable(); err != nil {
+			fmt.Fprintln(os.Stderr, "Piik: could not unpack its helper programs:", err)
+		}
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

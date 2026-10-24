@@ -35,3 +35,6 @@ Thumbs.db
 /err.txt
 /out.txt
 /runtime/
+
+# Gzip copies of runtime/ embedded by the standalone build (scripts/build-standalone.ps1)
+/internal/app/payload/files/
