@@ -76,6 +76,26 @@ describe("per-viewer frame-rate cap", () => {
     expect(states[0].behind).toBe(1);
   });
 
+  it("does not cap a viewer recovering from a network blackout", () => {
+    // Real PC windows: 2,707 packets lost, then a loss-free catch-up burst while
+    // the decoder waits for a key frame, then normal again.
+    const states = run([
+      window(240, 240),
+      window(4, 5, { lost: 2707 }),
+      window(363, 49), // loss-free, but still recovering from the lossy window
+      window(36, 19),
+      window(120, 120),
+      window(240, 238),
+    ]);
+    expect(states.every((state) => !state.capped)).toBe(true);
+    expect(states[5]).toEqual(INITIAL_FRAME_RATE_CAP);
+  });
+
+  it("still caps a stalled decoder once the link has been clean for a window", () => {
+    const states = run([window(240, 240), window(4, 5, { lost: 50 }), window(240, 240), window(240, 10)]);
+    expect(states.map((state) => state.capped)).toEqual([false, false, false, true]);
+  });
+
   it("scales the expected frame count by the window length", () => {
     // A 2.6 s window at 120 fps carries ~312 frames; decoding 300 is healthy.
     expect(run([window(310, 300, { windowMs: 2_630 })])[0]).toEqual(INITIAL_FRAME_RATE_CAP);

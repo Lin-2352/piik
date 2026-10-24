@@ -12,6 +12,9 @@
 export interface FrameRateCapState {
   behind: number;
   capped: boolean;
+  // The previous window lost packets: the decoder may still be waiting for a
+  // key frame, which looks like a stall but is the network's doing.
+  recovering?: boolean;
 }
 
 export const INITIAL_FRAME_RATE_CAP: FrameRateCapState = { behind: 0, capped: false };
@@ -42,18 +45,26 @@ export function nextFrameRateCap(
   if ((metrics.sequence ?? WARMUP_WINDOWS) < WARMUP_WINDOWS) return state;
   const received = metrics.framesReceivedDelta ?? null;
   const decoded = metrics.framesDecodedDelta;
-  if (received === null || decoded === null || received < MIN_WINDOW_FRAMES) return state;
+  const lossy = (metrics.packetsLostDelta ?? 0) > 0;
+  if (received === null || decoded === null || received < MIN_WINDOW_FRAMES) {
+    // A blackout delivers almost nothing; it still marks the recovery after it.
+    return lossy ? { ...state, recovering: true } : state;
+  }
   // What a healthy decoder could have decoded: no more than the stream carried
   // and no more than actually arrived (a network shortfall is not its fault).
   const expected = (shareFramerate * (metrics.windowMs ?? 2_000)) / 1_000;
   const available = Math.min(received, expected);
-  // Undecodable frames in a lossy window are a network burst, not the decoder:
-  // that window only counts as falling behind.
-  const lossFree = (metrics.packetsLostDelta ?? 0) === 0;
-  if (lossFree && decoded < available * STALLED_RATIO) return { behind: 0, capped: true };
+  // Undecodable frames in a lossy window, or the one after it, are a network
+  // burst and its key-frame wait, not the decoder: those windows only count as
+  // falling behind.
+  if (!lossy && !state.recovering && decoded < available * STALLED_RATIO) {
+    return { behind: 0, capped: true };
+  }
   if (decoded >= available * BEHIND_RATIO) {
-    return state.behind === 0 ? state : INITIAL_FRAME_RATE_CAP;
+    return state.behind === 0 && !lossy && !state.recovering
+      ? state
+      : { behind: 0, capped: false, ...(lossy ? { recovering: true } : {}) };
   }
   const behind = state.behind + 1;
-  return { behind, capped: behind >= BEHIND_WINDOWS };
+  return { behind, capped: behind >= BEHIND_WINDOWS, ...(lossy ? { recovering: true } : {}) };
 }
