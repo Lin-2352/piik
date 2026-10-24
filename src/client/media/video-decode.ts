@@ -76,6 +76,22 @@ export function currentVideoDecode(): VideoDecode | undefined {
 }
 
 /**
+ * The probe result, waiting at most timeoutMs for it. The Viewer reports its
+ * decode support (and whether it is a mobile browser) in its first message, so
+ * it waits briefly instead of authenticating before the probe has finished; a
+ * slow probe never blocks joining.
+ */
+export function settledVideoDecode(timeoutMs: number): Promise<VideoDecode | undefined> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(undefined), timeoutMs);
+    void videoDecodeProbe.then((result) => {
+      clearTimeout(timer);
+      resolve(result);
+    });
+  });
+}
+
+/**
  * Names the optional codec an offer depends on when this browser cannot
  * receive any of the offer's video codecs. A playable offer, or one whose
  * failure has another cause, returns null.
