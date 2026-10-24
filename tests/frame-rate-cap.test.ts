@@ -2,56 +2,97 @@ import { describe, expect, it } from "vitest";
 import {
   INITIAL_FRAME_RATE_CAP,
   nextFrameRateCap,
+  type FrameRateCapState,
 } from "../src/client/media/frame-rate-cap";
 
-const window = (received: number | null, decoded: number | null, dropped = 0, lost = 0) => ({
+const SHARE_FPS = 120;
+
+// One evidence window; a steady window at 120 fps is 240 frames in 2 s.
+const window = (
+  received: number | null,
+  decoded: number | null,
+  options: { lost?: number; sequence?: number; windowMs?: number } = {},
+) => ({
   framesReceivedDelta: received,
   framesDecodedDelta: decoded,
-  framesDroppedDelta: dropped,
-  packetsLostDelta: lost,
+  packetsLostDelta: options.lost ?? 0,
+  sequence: options.sequence ?? 10,
+  windowMs: options.windowMs ?? 2_000,
 });
 
+function run(windows: ReturnType<typeof window>[]): FrameRateCapState[] {
+  const states: FrameRateCapState[] = [];
+  let state = INITIAL_FRAME_RATE_CAP;
+  for (const next of windows) {
+    state = nextFrameRateCap(state, next, SHARE_FPS);
+    states.push(state);
+  }
+  return states;
+}
+
 describe("per-viewer frame-rate cap", () => {
-  it("caps at once when a viewer decodes less than half of what arrives", () => {
-    // A phone at 120 fps: every frame arrives, none is decoded.
-    expect(nextFrameRateCap(INITIAL_FRAME_RATE_CAP, window(240, 0), 120).capped).toBe(true);
+  it("caps at once when a viewer's decoder stalls: frames arrive, almost none is decoded", () => {
+    // The phone at 120 fps: 240 frames arrive per window, none is decoded.
+    expect(run([window(240, 0)])[0].capped).toBe(true);
+    expect(run([window(240, 40)])[0].capped).toBe(true);
   });
 
-  it("caps a viewer that keeps falling behind, but not after one bad window", () => {
-    const once = nextFrameRateCap(INITIAL_FRAME_RATE_CAP, window(240, 190), 120);
-    expect(once.capped).toBe(false);
-    expect(nextFrameRateCap(once, window(240, 195), 120).capped).toBe(true);
+  it("ignores the first windows after a join: decoder warm-up and the key-frame burst", () => {
+    const states = run([window(298, 0, { sequence: 0 }), window(301, 0, { sequence: 1 })]);
+    expect(states.map((state) => state.capped)).toEqual([false, false]);
   });
 
-  it("caps a viewer that keeps dropping frames", () => {
-    const once = nextFrameRateCap(INITIAL_FRAME_RATE_CAP, window(240, 230, 40), 120);
-    expect(nextFrameRateCap(once, window(240, 230, 40), 120).capped).toBe(true);
+  it("does not cap a viewer that decodes the full rate through a catch-up burst", () => {
+    // Real PC windows after a stall: more frames arrive than the stream sends.
+    const states = run([window(298, 250), window(291, 227), window(293, 214), window(300, 235)]);
+    expect(states.every((state) => !state.capped)).toBe(true);
   });
 
-  it("forgets a single hiccup once the viewer keeps up again", () => {
-    const hiccup = nextFrameRateCap(INITIAL_FRAME_RATE_CAP, window(240, 190), 120);
-    const recovered = nextFrameRateCap(hiccup, window(240, 240), 120);
-    expect(nextFrameRateCap(recovered, window(240, 190), 120).capped).toBe(false);
+  it("forgives the real PC join transient: one slow window between healthy ones", () => {
+    const states = run([
+      window(298, 250, { sequence: 2 }),
+      window(301, 158, { sequence: 3 }), // 48 frames dropped, decoded 66% of the rate
+      window(240, 240, { sequence: 4 }),
+      window(75, 75, { sequence: 5 }), // fewer arrive (network), all decoded: not the decoder
+      window(240, 238, { sequence: 6 }),
+    ]);
+    expect(states.every((state) => !state.capped)).toBe(true);
+    expect(states[4]).toEqual(INITIAL_FRAME_RATE_CAP);
+  });
+
+  it("caps a viewer that stays behind for three windows, not before", () => {
+    const states = run([window(240, 150), window(240, 160), window(240, 155)]);
+    expect(states.map((state) => state.capped)).toEqual([false, false, true]);
+  });
+
+  it("restarts the count when a window is healthy", () => {
+    const states = run([window(240, 150), window(240, 150), window(240, 240), window(240, 150), window(240, 150)]);
+    expect(states.every((state) => !state.capped)).toBe(true);
+  });
+
+  it("never caps on a lossy stall: undecodable frames there are a network burst", () => {
+    const states = run([window(240, 0, { lost: 40 })]);
+    expect(states[0].capped).toBe(false);
+    expect(states[0].behind).toBe(1);
+  });
+
+  it("scales the expected frame count by the window length", () => {
+    // A 2.6 s window at 120 fps carries ~312 frames; decoding 300 is healthy.
+    expect(run([window(310, 300, { windowMs: 2_630 })])[0]).toEqual(INITIAL_FRAME_RATE_CAP);
   });
 
   it("never caps below 50 fps: a 90 fps share stays whole", () => {
-    expect(nextFrameRateCap(INITIAL_FRAME_RATE_CAP, window(180, 0), 90).capped).toBe(false);
+    const state = nextFrameRateCap(INITIAL_FRAME_RATE_CAP, window(180, 0), 90);
+    expect(state.capped).toBe(false);
   });
 
   it("keeps a viewer capped once capped, so it never re-enters the stall", () => {
-    const capped = nextFrameRateCap(INITIAL_FRAME_RATE_CAP, window(240, 0), 120);
-    expect(nextFrameRateCap(capped, window(120, 120), 120).capped).toBe(true);
+    const capped = run([window(240, 0)])[0];
+    expect(nextFrameRateCap(capped, window(120, 120), SHARE_FPS).capped).toBe(true);
   });
 
   it("ignores windows without receive counters or with too few frames", () => {
-    expect(nextFrameRateCap(INITIAL_FRAME_RATE_CAP, window(null, 0), 120)).toEqual(INITIAL_FRAME_RATE_CAP);
-    expect(nextFrameRateCap(INITIAL_FRAME_RATE_CAP, window(4, 0), 120)).toEqual(INITIAL_FRAME_RATE_CAP);
-  });
-
-  it("does not cap at once on a lossy window: undecodable frames there are a network burst", () => {
-    const burst = nextFrameRateCap(INITIAL_FRAME_RATE_CAP, window(240, 0, 0, 40), 120);
-    expect(burst.capped).toBe(false);
-    // Recovered decoding after the burst forgets it.
-    expect(nextFrameRateCap(burst, window(240, 240), 120)).toEqual(INITIAL_FRAME_RATE_CAP);
+    expect(run([window(null, 0)])[0]).toEqual(INITIAL_FRAME_RATE_CAP);
+    expect(run([window(4, 0)])[0]).toEqual(INITIAL_FRAME_RATE_CAP);
   });
 });

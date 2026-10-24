@@ -1287,7 +1287,11 @@ export function HostPage({
     );
     if (peer instanceof NativeSenderPeer) {
       const previous = frameRateCapsRef.current.get(peer) ?? INITIAL_FRAME_RATE_CAP;
-      const next = nextFrameRateCap(previous, evidence.metrics, qualitySettingsRef.current.maxFramerate);
+      const next = nextFrameRateCap(
+        previous,
+        { ...evidence.metrics, sequence: evidence.sequence, windowMs: evidence.windowMs },
+        qualitySettingsRef.current.maxFramerate,
+      );
       frameRateCapsRef.current.set(peer, next);
       if (next.capped && !previous.capped) peer.capFrameRate();
     }
