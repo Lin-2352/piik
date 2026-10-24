@@ -200,6 +200,13 @@ void CheckH264TemporalInspection() {
   assert(InspectAnnexB({0, 0, 0, 1, 0x41, 0x9a}).temporal_id == 0);
 }
 
+// A reused encoder's first live frame can be an enhancement frame with no SPS;
+// only a key frame (which carries the profile) may announce an active capture.
+void CheckActiveWaitsForKeyFrame() {
+  assert(!ActivatesCapture(EncodedAccessUnit{1, false, {0, 0, 0, 1, 0x01, 0x9a}}));
+  assert(ActivatesCapture(EncodedAccessUnit{2, true, {0, 0, 0, 1, 0x65, 0x88}}));
+}
+
 // Two temporal layers only where halving still leaves smooth motion (>= 50 fps)
 // and the viewer cap can read them (LiveKit parses the HEVC temporal id).
 void CheckTemporalLayers() {
@@ -353,6 +360,7 @@ void CheckSurfaceSample(ID3D11Device* device) {
 int main() {
   CheckTemporalLayers();
   CheckH264TemporalInspection();
+  CheckActiveWaitsForKeyFrame();
   VideoProfile profile{2560, 1440, 60, 12'000'000};
   ValidateVideoProfile(profile);
   assert(profile.h264_level() == 51 && profile.profile_level_id() == "42c033");
