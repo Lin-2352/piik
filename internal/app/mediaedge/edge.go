@@ -444,6 +444,7 @@ func closeEdges(edges []*Edge) {
 // CapFrameRate limits this viewer to the base temporal layer: half the share's
 // frame rate when the encoder produces two temporal layers, unchanged otherwise.
 func (edge *Edge) CapFrameRate(capped bool) {
+	slog.Debug("frame-rate-cap", "connectionId", diagnostics.ID(edge.connectionID), "capped", capped)
 	layer := int32(-1)
 	if capped {
 		layer = 0
