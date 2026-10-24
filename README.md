@@ -24,7 +24,7 @@ on your own server.
 
 </details>
 
-[Features](#features) · [Get started](#get-started) · [Self-hosting](#self-hosting) · [Contributing](#contributing)
+[Features](#features) · [Get started](#get-started) · [Windows standalone](#windows-standalone) · [Self-hosting](#self-hosting) · [Contributing](#contributing)
 
 ## Features
 
@@ -87,6 +87,34 @@ sharing are the primary tested paths. Physical-device coverage for the macOS and
 Linux apps is still limited; test results and feedback are welcome.
 P2P-only modes, including the App's temporary public
 link, may not connect on restrictive networks.
+
+## Windows standalone
+
+`Piik.exe` is the whole Piik App in one portable file: the web interface, the
+native screen capture and encode helper, and the public-link tunnel. There is no
+installer.
+
+1. Download `Piik.exe` and `Piik-Guide.md` from the latest
+   [release](https://github.com/Lin-2352/piik/releases/latest) of this repository.
+2. Put them in a folder you can write to and run `Piik.exe`. Choose **Local room**
+   or **Public invite**, then **Start sharing**.
+3. Settings, presets and your last choices are saved in a `piik-data` folder next
+   to the exe, so the folder moves with you. Helper programs unpack once into a
+   `runtime` folder beside it.
+
+- **NVIDIA hardware encoding.** When the PC has an NVIDIA GPU, H.264, H.265 and
+  AV1 encode on its video encoder and only that GPU is used; a game running at
+  full GPU load does not stall the stream. VP8 is a CPU fallback.
+- **Per-viewer frame rate.** A phone that cannot decode a 100+ fps stream is held
+  at half the frame rate automatically, from its first frame, while a PC keeps
+  the full rate.
+- **Known limit.** A phone joining a full 2560-wide picture can freeze for about
+  two seconds at the start; a 1080p picture or 60 fps avoids it.
+
+[**Standalone guide →**](./standalone/Piik-Guide.md)
+
+To build it yourself on Windows: `pwsh scripts/build-standalone.ps1 -Version v1.10.0`
+(needs Go, Node and the helper binaries in `runtime/`; see the script header).
 
 ## Self-hosting
 

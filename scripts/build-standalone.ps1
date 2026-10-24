@@ -10,11 +10,14 @@ Inputs (the same files a normal run uses):
   runtime/tunnel/cloudflared.exe         public-link tunnel
   runtime/tunnel/THIRD-PARTY-NOTICES.txt
 
-Usage: pwsh scripts/build-standalone.ps1 [-OutputDirectory build/standalone] [-RebuildHelper]
+Usage: pwsh scripts/build-standalone.ps1 [-OutputDirectory build/standalone] [-Version v1.10.0] [-RebuildHelper]
+  -Version        stamp this product version (canonical vMAJOR.MINOR.PATCH) into the exe
   -RebuildHelper  rebuild the native helper from native/capture/windows first
+The git revision is always stamped.
 #>
 param(
   [string]$OutputDirectory = 'build/standalone',
+  [string]$Version = '',
   [switch]$RebuildHelper
 )
 $ErrorActionPreference = 'Stop'
@@ -56,7 +59,14 @@ foreach ($entry in $payload.GetEnumerator()) {
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $exe = Join-Path $OutputDirectory 'Piik.exe'
 Write-Host 'Building Piik.exe...'
-go build -tags standalone -trimpath -ldflags '-s -w' -o $exe ./cmd/piik-app
+$linker = '-s -w'
+$revision = (git rev-parse HEAD).Trim()
+if ($revision) { $linker += " -X github.com/TNTcraftHIM/Piik/internal/app.BuildRevision=$revision" }
+if ($Version) {
+  if ($Version -notmatch '^v\d+\.\d+\.\d+$') { throw "-Version must look like v1.2.3" }
+  $linker += " -X github.com/TNTcraftHIM/Piik/internal/app.BuildVersion=$Version"
+}
+go build -tags standalone -trimpath -ldflags $linker -o $exe ./cmd/piik-app
 if ($LASTEXITCODE -ne 0) { throw 'go build failed' }
 Copy-Item standalone/Piik-Guide.md (Join-Path $OutputDirectory 'Piik-Guide.md') -Force
 Remove-Item $files -Recurse -Force
