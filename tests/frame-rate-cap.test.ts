@@ -84,7 +84,8 @@ describe("per-viewer frame-rate cap", () => {
   it("never caps on a lossy stall: undecodable frames there are a network burst", () => {
     const states = afterWarmup([window(240, 0, { lost: 40 })]);
     expect(states[0].capped).toBe(false);
-    expect(states[0].behind).toBe(1);
+    expect(states[0].behind).toBe(0);
+    expect(states[0].recovering).toBe(true);
   });
 
   it("does not cap a viewer recovering from a network blackout", () => {
@@ -99,6 +100,12 @@ describe("per-viewer frame-rate cap", () => {
     ]);
     expect(states.every((state) => !state.capped)).toBe(true);
     expect(states[4]).toEqual({ ...INITIAL_FRAME_RATE_CAP, seen: 7 });
+  });
+
+  it("never caps on lossy windows alone: a Wi-Fi burst must not halve a capable PC for good", () => {
+    const burst = window(240, 150, { lost: 40 });
+    const states = afterWarmup([burst, burst, burst, burst, burst]);
+    expect(states.every((state) => !state.capped)).toBe(true);
   });
 
   it("still caps a stalled decoder once the link has been clean for a window", () => {

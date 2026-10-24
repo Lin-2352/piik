@@ -70,6 +70,9 @@ export function nextFrameRateCap(
   if (decoded >= available * BEHIND_RATIO) {
     return { behind: 0, capped: false, seen, ...(lossy ? { recovering: true } : {}) };
   }
+  // Packets were lost in this window: a lost frame is not a slow decoder, so the
+  // window is not counted. A phone that really stalls is caught on a clean window.
+  if (lossy) return { ...state, seen, recovering: true };
   const behind = state.behind + 1;
-  return { behind, capped: behind >= BEHIND_WINDOWS, seen, ...(lossy ? { recovering: true } : {}) };
+  return { behind, capped: behind >= BEHIND_WINDOWS, seen };
 }
