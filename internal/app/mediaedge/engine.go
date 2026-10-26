@@ -194,6 +194,8 @@ func (engine *Engine) NewSource(codec string, capacity, layers int, requestKeyFr
 	source.media = media
 	if requestKeyFrame != nil {
 		source.recoveryRequests = make(chan struct{}, 1)
+		source.recovery = newDebugRecoveryLedger()
+		source.tracePlans = source.recovery != nil
 		source.recoveryStopped = make(chan struct{})
 		go source.runRecovery()
 	}

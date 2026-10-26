@@ -322,6 +322,11 @@ func (source *Source) planGroups(demands []outputDemand) (OutputPlan, error) {
 			plan.Bitrates[group.slot] = uint32(max(1000, codec/step*step))
 		}
 	}
+	if source.tracePlans {
+		if line, changed := source.planTrace.describe(plan, demands); changed {
+			slog.Debug("encoder-slots", "plan", line, "sourceId", diagnostics.ID(fmt.Sprintf("%p", source)))
+		}
+	}
 	return plan, nil
 }
 

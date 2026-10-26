@@ -36,22 +36,26 @@ type OutputPlan struct {
 }
 
 type Source struct {
-	engine           *Engine
-	codec            string
-	media            *forwarding.EncodedSource
-	formats          []atomic.Uint64
-	outputBitrates   []uint32
-	capacity         int
-	requestKeyFrame  func([]int)
-	relayProfile     *nativecapture.VideoProfile
-	relay            *relayDerivation
-	groups           map[int]*outputGroup
-	memberships      map[groupConsumer]*outputGroup
-	heldBudgets      map[groupConsumer]heldBudget
-	floorDivisor     int64
-	now              func() time.Time
-	groupRecovery    atomic.Uint32
-	pendingRecovery  atomic.Uint32
+	engine          *Engine
+	codec           string
+	media           *forwarding.EncodedSource
+	formats         []atomic.Uint64
+	outputBitrates  []uint32
+	capacity        int
+	requestKeyFrame func([]int)
+	relayProfile    *nativecapture.VideoProfile
+	relay           *relayDerivation
+	groups          map[int]*outputGroup
+	memberships     map[groupConsumer]*outputGroup
+	heldBudgets     map[groupConsumer]heldBudget
+	floorDivisor    int64
+	now             func() time.Time
+	groupRecovery   atomic.Uint32
+	pendingRecovery atomic.Uint32
+	// recovery is non-nil only with debug logging on (see recovery_ledger.go).
+	recovery         *recoveryLedger
+	planTrace        planTrace
+	tracePlans       bool // debug logging on: log encoder plan changes
 	recoveryRequests chan struct{}
 	recoveryStopped  chan struct{}
 	inputPTS         time.Duration
@@ -633,6 +637,9 @@ func (source *Source) detach(edge *Edge) {
 }
 
 func (source *Source) requestLayerKeyFrame(layer int) {
+	if source.recovery != nil {
+		source.recovery.requested(callSite(2), layer)
+	}
 	// Direct capture receives this request through its callback, including while
 	// quiet. A relay's callback only wakes upstream; its local encoders still
 	// need recovery in the next frame's plan, as do callback-free producers.
@@ -643,6 +650,9 @@ func (source *Source) requestLayerKeyFrame(layer int) {
 }
 
 func (source *Source) RequestRecoveryFrame() {
+	if source.recovery != nil {
+		source.recovery.requested(callSite(2), -1)
+	}
 	source.requestRecovery(-1)
 }
 
@@ -693,6 +703,7 @@ func (source *Source) runRecovery() {
 						}
 					}
 				}
+				source.recovery.delivered(len(layers))
 				source.requestKeyFrame(layers)
 			}
 		}
